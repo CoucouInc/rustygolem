@@ -1,3 +1,4 @@
+use nom::Finish;
 use nom::{
     branch::alt,
     bytes::complete::tag,
@@ -11,7 +12,6 @@ use nom::{
     error::Error,
     IResult,
 };
-use nom::Finish;
 use nom::{
     character::complete::{alphanumeric1, char, multispace0, multispace1},
     combinator::recognize,
@@ -30,13 +30,14 @@ pub enum CTCP<'input> {
 pub enum CoucouCmd<'input> {
     CTCP(CTCP<'input>),
     Date(Option<&'input str>),
+    Joke(Option<&'input str>),
     Other(&'input str),
 }
 
 pub fn parse_command<'input>(
     input: &'input str,
 ) -> std::result::Result<CoucouCmd<'input>, Error<&str>> {
-    all_consuming(alt((ctcp, date, other)))(input)
+    all_consuming(alt((ctcp, date, joke, other)))(input)
         .finish()
         .map(|x| x.1)
 }
@@ -63,6 +64,13 @@ fn ctcp(input: &str) -> IResult<&str, CoucouCmd> {
         // sketchy flat_map there, there is likely a better combinator.
         flat_map(raw_parse, move |i| move |_| ctcp_cmd(i)),
         CoucouCmd::CTCP,
+    )(input)
+}
+
+fn joke(input: &str) -> IResult<&str, CoucouCmd> {
+    preceded(
+        command_prefix,
+        map(with_target(tag("joke")), |(_, t)| CoucouCmd::Joke(t)),
     )(input)
 }
 
@@ -144,6 +152,34 @@ mod test {
             ctcp("\u{001}PING 123\u{001}"),
             Ok(("", CoucouCmd::CTCP(CTCP::PING(Some("123"))))),
             "ping with argument"
+        );
+    }
+
+    #[test]
+    fn test_date() {
+        assert_eq!(
+            parse_command("ρdate"),
+            Ok(CoucouCmd::Date(None)),
+            "date with no target"
+        );
+        assert_eq!(
+            parse_command("ρdate > charlie"),
+            Ok(CoucouCmd::Date(Some("charlie"))),
+            "date with target"
+        );
+    }
+
+    #[test]
+    fn test_joke() {
+        assert_eq!(
+            parse_command("ρjoke"),
+            Ok(CoucouCmd::Joke(None)),
+            "joke with no target"
+        );
+        assert_eq!(
+            parse_command("ρjoke > charlie"),
+            Ok(CoucouCmd::Joke(Some("charlie"))),
+            "joke with target"
         );
     }
 }

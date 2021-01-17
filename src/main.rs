@@ -11,18 +11,14 @@ use futures::prelude::*;
 // use itertools::Itertools;
 
 mod ctcp;
+mod joke;
 mod parser;
 mod republican_calendar;
+mod utils;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-
-    let blacklisted_users = vec![
-        "coucoubot",
-        "lambdacoucou",
-        "M`arch`ov",
-        "coucoucou",
-    ];
+    let blacklisted_users = vec!["coucoubot", "lambdacoucou", "M`arch`ov", "coucoucou"];
 
     let config = Config {
         owners: vec!["Geekingfrog".to_string()],
@@ -54,7 +50,10 @@ async fn main() -> Result<()> {
 
         if let Command::PRIVMSG(_source, message) = irc_message.command {
             if blacklisted_users.contains(&&source_nickname[..]) {
-                println!("message from blacklisted user: {}, discarding", source_nickname);
+                println!(
+                    "message from blacklisted user: {}, discarding",
+                    source_nickname
+                );
                 continue;
             }
 
@@ -68,6 +67,12 @@ async fn main() -> Result<()> {
                     }
                     parser::CoucouCmd::Date(mb_target) => {
                         match republican_calendar::handle_command(mb_target) {
+                            None => (),
+                            Some(msg) => client.send_privmsg(response_target, msg)?,
+                        }
+                    }
+                    parser::CoucouCmd::Joke(mb_target) => {
+                        match joke::handle_command(mb_target).await {
                             None => (),
                             Some(msg) => client.send_privmsg(response_target, msg)?,
                         }

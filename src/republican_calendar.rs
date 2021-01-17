@@ -2,10 +2,11 @@ use anyhow::{Context, Result};
 use chrono::Datelike;
 use chrono::{naive::NaiveDate, Utc};
 use std::convert::TryFrom;
+use crate::utils::messages::with_target;
 
-pub fn handle_command(mb_target: Option<&str>) -> Option<String> {
+pub(crate) fn handle_command(mb_target: Option<&str>) -> Option<String> {
     let msg = match RepublicanDate::try_from(Utc::now().naive_utc().date()) {
-        Ok(rd) => format!("Nous sommes aujourd'hui le {}.", rd),
+        Ok(rd) => with_target(&format!("Nous sommes aujourd'hui le {}", rd), &mb_target),
         Err(err) => format!("{}", err),
     };
     Some(msg)
