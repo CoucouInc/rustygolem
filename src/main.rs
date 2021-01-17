@@ -5,10 +5,8 @@ use irc::client::prelude::*;
 extern crate anyhow;
 
 use anyhow::Result;
-// use futures::stream;
 use futures::prelude::*;
-// use futures::prelude::stream::*;
-// use itertools::Itertools;
+use structopt::StructOpt;
 
 mod ctcp;
 mod joke;
@@ -16,19 +14,44 @@ mod parser;
 mod republican_calendar;
 mod utils;
 
+#[derive(Debug, StructOpt)]
+struct Opt {
+    /// list of channels to join
+    #[structopt(long)]
+    channels: Vec<String>,
+
+    #[structopt(long, default_value = "rustycoucou")]
+    nickname: String,
+
+    #[structopt(long, default_value = "chat.freenode.net")]
+    server: String,
+
+    #[structopt(long, default_value = "7000")]
+    port: u16,
+
+    #[structopt(long)]
+    disable_tls: bool,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let blacklisted_users = vec!["coucoubot", "lambdacoucou", "M`arch`ov", "coucoucou"];
 
+    let opt = Opt::from_args();
+
+    if opt.channels.is_empty() {
+        return Err(anyhow!("No channels to join, aborting"));
+    }
+
+    println!("Joining channel(s): {:?}", opt.channels);
+
     let config = Config {
         owners: vec!["Geekingfrog".to_string()],
-        nickname: Some("rustycoucou".to_string()),
-        server: Some("chat.freenode.net".to_string()),
-        // port: Some(6667),
-        // use_tls: Some(false),
-        port: Some(7000),
-        use_tls: Some(true),
-        channels: vec!["#gougoutest".to_string()],
+        nickname: Some(opt.nickname),
+        server: Some(opt.server),
+        port: Some(opt.port),
+        use_tls: Some(!opt.disable_tls),
+        channels: opt.channels,
         ..Config::default()
     };
 
