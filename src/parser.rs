@@ -1,4 +1,3 @@
-use nom::Finish;
 use nom::{
     branch::alt,
     bytes::complete::tag,
@@ -18,6 +17,9 @@ use nom::{
     multi::many1,
 };
 use nom::{error::ParseError, sequence::pair};
+use nom::{sequence::terminated, Finish};
+
+use crate::crypto::CryptoCoin;
 
 #[derive(Debug, PartialEq)]
 pub enum CTCP<'input> {
@@ -31,15 +33,19 @@ pub enum CoucouCmd<'input> {
     CTCP(CTCP<'input>),
     Date(Option<&'input str>),
     Joke(Option<&'input str>),
+    Crypto(Result<CryptoCoin, &'input str>, Option<&'input str>),
     Other(&'input str),
 }
 
 pub fn parse_command<'input>(
     input: &'input str,
 ) -> std::result::Result<CoucouCmd<'input>, Error<&str>> {
-    all_consuming(alt((ctcp, date, joke, other)))(input)
-        .finish()
-        .map(|x| x.1)
+    all_consuming(terminated(
+        alt((ctcp, date, joke, crypto, other)),
+        multispace0,
+    ))(input)
+    .finish()
+    .map(|x| x.1)
 }
 
 fn ctcp_cmd(input: &str) -> IResult<&str, CTCP> {
@@ -74,6 +80,25 @@ fn joke(input: &str) -> IResult<&str, CoucouCmd> {
     )(input)
 }
 
+fn crypto(input: &str) -> IResult<&str, CoucouCmd> {
+    preceded(
+        command_prefix,
+        map(
+            with_target(tuple((tag("crypto"), multispace1, crypto_cmd))),
+            |((_, _, c), t)| CoucouCmd::Crypto(c, t),
+        ),
+    )(input)
+}
+
+fn crypto_cmd(input: &str) -> IResult<&str, Result<CryptoCoin, &str>> {
+    alt((
+        map(tag("xbt"), |_| Ok(CryptoCoin::Bitcoin)),
+        map(tag("btc"), |_| Ok(CryptoCoin::Bitcoin)),
+        map(tag("eth"), |_| Ok(CryptoCoin::Ethereum)),
+        map(word, |w| Err(w)),
+    ))(input)
+}
+
 fn other(input: &str) -> IResult<&str, CoucouCmd> {
     map(rest, CoucouCmd::Other)(input)
 }
@@ -89,19 +114,22 @@ fn command_prefix(input: &str) -> IResult<&str, &str> {
     is_a("ρ")(input)
 }
 
-fn with_target<'a, F: 'a, E: ParseError<&'a str>>(
+fn with_target<'a, O, F: 'a, E: ParseError<&'a str>>(
     inner: F,
-) -> impl FnMut(&'a str) -> IResult<&'a str, (&'a str, Option<&'a str>), E>
+) -> impl FnMut(&'a str) -> IResult<&'a str, (O, Option<&'a str>), E>
 where
-    F: Fn(&'a str) -> IResult<&'a str, &'a str, E>,
+    F: FnMut(&'a str) -> IResult<&'a str, O, E>,
 {
     pair(inner, opt(target))
 }
 
 fn target<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E> {
     let target_sep = delimited(multispace0, char('>'), multispace1);
-    let nick = recognize(many1(alphanumeric1));
-    map(tuple((target_sep, nick, multispace0)), |(_, n, _)| n)(input)
+    map(tuple((target_sep, word, multispace0)), |(_, n, _)| n)(input)
+}
+
+fn word<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E> {
+    recognize(many1(alphanumeric1))(input)
 }
 
 #[cfg(test)]
@@ -180,6 +208,35 @@ mod test {
             parse_command("ρjoke > charlie"),
             Ok(CoucouCmd::Joke(Some("charlie"))),
             "joke with target"
+        );
+    }
+
+    #[test]
+    async fn test_crypto() {
+        assert_eq!(
+            parse_command("ρcrypto"),
+            Ok(CoucouCmd::Other("ρcrypto")),
+            "must have something after the command"
+        );
+        assert_eq!(
+            parse_command("ρcrypto > charlie"),
+            Ok(CoucouCmd::Other("ρcrypto > charlie")),
+            "must have a currency"
+        );
+        assert_eq!(
+            parse_command("ρcrypto lol > charlie"),
+            Ok(CoucouCmd::Crypto(Err("lol"), Some("charlie"))),
+            "unknown currency"
+        );
+        assert_eq!(
+            parse_command("ρcrypto xbt > charlie"),
+            Ok(CoucouCmd::Crypto(Ok(CryptoCoin::Bitcoin), Some("charlie"))),
+            "known currency with target"
+        );
+        assert_eq!(
+            parse_command("ρcrypto xbt "),
+            Ok(CoucouCmd::Crypto(Ok(CryptoCoin::Bitcoin), None)),
+            "known currency without target"
         );
     }
 }

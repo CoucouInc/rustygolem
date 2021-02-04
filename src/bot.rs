@@ -56,6 +56,10 @@ pub async fn run_bot(client: &Arc<Mutex<Client>>) -> Result<()> {
                             Some(msg) => client.lock().unwrap().send_privmsg(response_target, msg)?,
                         }
                     }
+                    parser::CoucouCmd::Crypto(_, _mb_target) => {
+                        println!("coucou crypto");
+                        todo!();
+                    }
                     parser::CoucouCmd::Other(_) => (),
                 },
             }

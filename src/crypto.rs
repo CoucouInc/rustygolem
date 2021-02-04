@@ -15,7 +15,7 @@ pub async fn watch_rates() -> Result<()> {
     todo!()
 }
 
-#[derive(Debug, FromSqlRow, AsExpression)]
+#[derive(Debug, FromSqlRow, AsExpression, PartialEq)]
 #[sql_type = "Text"]
 pub enum CryptoCoin {
     Bitcoin,
@@ -165,32 +165,6 @@ pub async fn get_and_save_all_rates() -> Result<()> {
     })
     .await??;
 
-    Ok(())
-}
-
-struct TestInsert {
-    coucou: String,
-}
-
-pub async fn get_and_save_rate(
-    client: &reqwest::Client,
-    conn: Arc<Mutex<SqliteConnection>>,
-    crypto_coin: CryptoCoin,
-) -> Result<()> {
-    let coin_rate = crypto_coin.get_rate_in_euro(&client).await?;
-
-    task::spawn_blocking(move || {
-        let row = CryptoCoinRate {
-            date: chrono::Utc::now().naive_utc(),
-            coin: crypto_coin,
-            rate: coin_rate,
-        };
-        let conn = conn.lock().unwrap();
-        diesel::insert_into(crypto_rate::table)
-            .values(&row)
-            .execute(&*conn)
-    })
-    .await??;
     Ok(())
 }
 
