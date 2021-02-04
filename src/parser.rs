@@ -110,7 +110,7 @@ mod test {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn test_target() {
+    async fn test_target() {
         // monomorphised version to help type inference
         fn _target(input: &str) -> IResult<&str, &str> {
             target(input)
@@ -129,7 +129,7 @@ mod test {
     }
 
     #[test]
-    fn test_ctcp() {
+    async fn test_ctcp() {
         assert_eq!(
             ctcp("\u{001}VERSION\u{001}"),
             Ok(("", CoucouCmd::CTCP(CTCP::VERSION))),
@@ -156,7 +156,7 @@ mod test {
     }
 
     #[test]
-    fn test_date() {
+    async fn test_date() {
         assert_eq!(
             parse_command("ρdate"),
             Ok(CoucouCmd::Date(None)),
@@ -170,7 +170,7 @@ mod test {
     }
 
     #[test]
-    fn test_joke() {
+    async fn test_joke() {
         assert_eq!(
             parse_command("ρjoke"),
             Ok(CoucouCmd::Joke(None)),

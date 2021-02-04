@@ -2,12 +2,13 @@ use anyhow::Result;
 use chrono::{format::StrftimeItems, Utc};
 use irc::{client::Client, proto::Command};
 use std::convert::TryFrom;
+use std::sync::{Arc, Mutex};
 
 use crate::{parser::CTCP, republican_calendar::RepublicanDate};
 
 // ctcp feature is disabled so we can override the TIME to reply with
 // the republican calendar (crucial feature right there).
-pub(crate) fn handle_ctcp(client: &Client, target: String, ctcp: CTCP) -> Result<()> {
+pub(crate) fn handle_ctcp(client: &Arc<Mutex<Client>>, target: String, ctcp: CTCP) -> Result<()> {
     let msg = match ctcp {
         CTCP::VERSION => "VERSION rustycoucou".to_string(),
         CTCP::TIME => {
@@ -21,6 +22,9 @@ pub(crate) fn handle_ctcp(client: &Client, target: String, ctcp: CTCP) -> Result
             format!("PING{}", arg)
         }
     };
-    client.send(Command::NOTICE(target, format!("\u{001}{}\u{001}", msg)))?;
+    {
+        let client = client.lock().unwrap();
+        client.send(Command::NOTICE(target, format!("\u{001}{}\u{001}", msg)))?;
+    }
     Ok(())
 }

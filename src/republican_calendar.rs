@@ -529,7 +529,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_conversion() {
+    async fn test_conversion() {
         assert_eq!(
             RepublicanDate::try_from(NaiveDate::from_ymd(2021, 1, 14))
                 .map_err(|e| format!("{:?}", e)),
