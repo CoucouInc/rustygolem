@@ -7,6 +7,7 @@ use crate::parser;
 use crate::republican_calendar;
 use crate::ctcp;
 use crate::joke;
+use crate::crypto;
 
 pub async fn run_bot(client: &Arc<Mutex<Client>>) -> Result<()> {
     let blacklisted_users = vec!["coucoubot", "lambdacoucou", "M`arch`ov", "coucoucou"];
@@ -56,9 +57,11 @@ pub async fn run_bot(client: &Arc<Mutex<Client>>) -> Result<()> {
                             Some(msg) => client.lock().unwrap().send_privmsg(response_target, msg)?,
                         }
                     }
-                    parser::CoucouCmd::Crypto(_, _mb_target) => {
-                        println!("coucou crypto");
-                        todo!();
+                    parser::CoucouCmd::Crypto(coin, mb_target) => {
+                        match crypto::handle_command(coin, mb_target).await {
+                            None => (),
+                            Some(msg) => client.lock().unwrap().send_privmsg(response_target, msg)?,
+                        }
                     }
                     parser::CoucouCmd::Other(_) => (),
                 },

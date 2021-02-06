@@ -43,40 +43,9 @@ struct Opt {
     disable_tls: bool,
 }
 
-// #[tokio::main]
-// async fn main() -> Result<()> {
-//     // tokio::try_join!(do_async1(), do_async2())?;
-//     let (tag, res) = tokio::select!{
-//         // a = do_async1() => a.and_then(|_| Err(anyhow!("finished early!"))).context("async1").unwrap_err(),
-//         // a = do_async2() => a.and_then(|_| Err(anyhow!("finished early!"))).context("async2").unwrap_err(),
-//         a = do_async1() => {("async1", a)}
-//         a = do_async2() => {("async2", a)}
-//     };
-//     match res {
-//         Ok(_) => println!("{} finished early", tag),
-//         Err(err) => println!("{} errored with: {}", tag, err),
-//     };
-//     Ok(())
-// }
-//
-// async fn do_async1() -> Result<()> {
-//     for i in 0..=4 {
-//         println!("coucou1 {}", i);
-//         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-//     }
-//     Ok(())
-// }
-//
-// async fn do_async2() -> Result<()> {
-//     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-//     println!("done async 2");
-//     Err(anyhow!("oh noooes"))
-// }
-
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
-    // db::get_and_save_rates().await?;
-    // crypto::test()?;
+    // println!("{:?}", crypto::handle_command(Ok(crypto::CryptoCoin::Bitcoin), Some("charlie")).await);
     // return Ok(());
 
     let opt = Opt::from_args();

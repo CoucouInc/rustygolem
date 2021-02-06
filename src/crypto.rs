@@ -1,19 +1,17 @@
 use anyhow::{Context, Result};
+use chrono::{Datelike, Utc};
 use diesel::serialize::ToSql;
 use diesel::{backend::Backend, prelude::*, sql_types};
 use diesel::{deserialize::FromSql, sql_types::Text};
 use reqwest::Client;
 use serde::Deserialize;
 use std::sync::{Arc, Mutex};
-use tokio::task;
 use std::time::Duration;
+use tokio::task;
 
-use crate::db;
-use crate::schema::crypto_rate::{self, dsl::*};
-
-pub async fn watch_rates() -> Result<()> {
-    todo!()
-}
+use crate::schema::crypto_rate::{self, dsl};
+use crate::utils::messages::handle_errors;
+use crate::{db, utils::messages::with_target};
 
 #[derive(Debug, FromSqlRow, AsExpression, PartialEq)]
 #[sql_type = "Text"]
@@ -39,7 +37,6 @@ where
 impl<DB> ToSql<sql_types::Text, DB> for CryptoCoin
 where
     DB: Backend,
-    // Self: ToSql<sql_types::Text, DB>,
 {
     fn to_sql<W: std::io::Write>(
         &self,
@@ -104,31 +101,9 @@ struct CryptoCoinRate {
     rate: f32,
 }
 
-pub fn test() -> Result<()> {
-    let conn = db::establish_connection()?;
-    let results = crypto_rate.limit(5).load::<CryptoCoinRate>(&conn)?;
-    for r in results {
-        println!("{:?}", r);
-    }
-
-    let d = chrono::Utc::now().naive_utc();
-    let new_rate = CryptoCoinRate {
-        date: d,
-        coin: CryptoCoin::Ethereum,
-        rate: 123.45,
-    };
-
-    diesel::insert_into(crypto_rate::table)
-        .values(&new_rate)
-        .execute(&conn)?;
-
-    let r = crypto_rate
-        .filter(crypto_rate::date.eq(d))
-        .first::<CryptoCoinRate>(&conn)?;
-    println!("{:#?}", r);
-
-    Ok(())
-}
+// pub fn test() -> Result<()> {
+//     Ok(())
+// }
 
 /// fetch, and save all crypto rates every minute
 pub async fn monitor_crypto_coins() -> Result<()> {
@@ -140,7 +115,6 @@ pub async fn monitor_crypto_coins() -> Result<()> {
 
 pub async fn get_and_save_all_rates() -> Result<()> {
     let client = reqwest::Client::new();
-    let conn = task::spawn_blocking(db::establish_connection).await??;
     let (btc_rate, eth_rate) = try_join!(
         CryptoCoin::Bitcoin.get_rate_in_euro(&client),
         CryptoCoin::Ethereum.get_rate_in_euro(&client),
@@ -159,13 +133,102 @@ pub async fn get_and_save_all_rates() -> Result<()> {
     };
 
     task::spawn_blocking(move || {
+        let conn = db::establish_connection()?;
         diesel::insert_into(crypto_rate::table)
             .values((&btc_row, &eth_row))
             .execute(&conn)
+            .with_context(|| format!("Cannot insert {:?} into db", (&btc_row, &eth_row)))
     })
     .await??;
 
     Ok(())
+}
+
+pub(crate) async fn handle_command(
+    cmd: std::result::Result<CryptoCoin, &str>,
+    mb_target: Option<&str>,
+) -> Option<String> {
+    let message = match cmd {
+        Err(x) => {
+            format!("Dénomination inconnue: {}. Ici on ne deal qu'avec des monnais respectueuses comme btc (aka xbt) et eth.", x)
+        }
+        Ok(c) => handle_errors(get_rate_and_history(c).await),
+    };
+    Some(with_target(&message, &mb_target))
+}
+
+async fn get_rate_and_history(coin: CryptoCoin) -> Result<String> {
+    let client = reqwest::Client::new();
+    let rate = coin.get_rate_in_euro(&client).await?;
+    let row = CryptoCoinRate {
+        date: chrono::Utc::now().naive_utc(),
+        coin,
+        rate,
+    };
+    task::spawn_blocking(move || {
+        let conn = db::establish_connection()?;
+        diesel::insert_into(crypto_rate::table)
+            .values(&row)
+            .execute(&conn)
+            .with_context(|| format!("Cannot insert {:?} into db", row))?;
+
+        let now = Utc::now();
+        let past_day = dsl::crypto_rate
+            .filter(dsl::date.le((now - chrono::Duration::days(1)).naive_utc()))
+            .order_by(dsl::date.desc())
+            .limit(1)
+            .load::<CryptoCoinRate>(&conn)?
+            .into_iter()
+            .next();
+
+        let past_week = dsl::crypto_rate
+            .filter(dsl::date.le((now - chrono::Duration::days(7)).naive_utc()))
+            .order_by(dsl::date.desc())
+            .limit(1)
+            .load::<CryptoCoinRate>(&conn)?
+            .into_iter()
+            .next();
+
+        let past_month = dsl::crypto_rate
+            // not quite 1 month, but 🤷
+            .filter(dsl::date.le((now - chrono::Duration::days(30)).naive_utc()))
+            .order_by(dsl::date.desc())
+            .limit(1)
+            .load::<CryptoCoinRate>(&conn)?
+            .into_iter()
+            .next();
+
+        let result = vec![(past_day, "1D"), (past_week, "1W"), (past_month, "1M")]
+            .into_iter()
+            .filter_map(|(mb_r, suffix)| {
+                mb_r.map(|r| {
+                    let var = RateVariation((rate - r.rate) / rate * 100.0);
+                    format!("{:.02} {}", var, suffix)
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let x: Result<_> = Ok(result.join(" − "));
+        x
+    })
+    .await?
+}
+
+struct RateVariation(f32);
+
+impl std::fmt::Display for RateVariation {
+    fn fmt(&self, mut f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let r = self.0;
+
+        match r.partial_cmp(&0.) {
+            Some(std::cmp::Ordering::Less) => f.write_str("↘")?,
+            Some(std::cmp::Ordering::Greater) => f.write_str("↗")?,
+            _ => f.write_str("−")?,
+        }
+        r.abs().fmt(&mut f)?;
+        f.write_str("%")?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
