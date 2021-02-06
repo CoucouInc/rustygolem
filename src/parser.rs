@@ -112,7 +112,7 @@ fn date(input: &str) -> IResult<&str, CoucouCmd> {
 }
 
 fn command_prefix(input: &str) -> IResult<&str, &str> {
-    is_a("ρ")(input)
+    alt((is_a("&"), is_a("λ")))(input)
 }
 
 fn with_target<'a, O, F: 'a, E: ParseError<&'a str>>(
