@@ -29,7 +29,7 @@ pub async fn run_bot(client: &Arc<Mutex<Client>>) -> Result<()> {
             .unwrap_or("".to_string());
 
         if blacklisted_users.contains(&&source_nickname[..]) {
-            println!(
+            log::debug!(
                 "message from blacklisted user: {}, discarding",
                 source_nickname
             );
@@ -40,7 +40,11 @@ pub async fn run_bot(client: &Arc<Mutex<Client>>) -> Result<()> {
             let parsed_command = parser::parse_command(&message);
 
             match parsed_command {
-                Err(err) => eprintln!("error parsing message: {} from: {}", err, message),
+                Err(err) => {
+                    log::error!("error parsing message: {} from: {}", err, message);
+                    let msg = format!("error parsing message: {} from: {}", err, message);
+                    client.lock().unwrap().send_privmsg("Geekingfrog", msg)?;
+                },
                 Ok(cmd) => match cmd {
                     parser::CoucouCmd::CTCP(ctcp) => {
                         ctcp::handle_ctcp(&client, response_target, ctcp)?;

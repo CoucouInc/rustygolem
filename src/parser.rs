@@ -187,12 +187,12 @@ mod test {
     #[test]
     async fn test_date() {
         assert_eq!(
-            parse_command("ρdate"),
+            parse_command("λdate"),
             Ok(CoucouCmd::Date(None)),
             "date with no target"
         );
         assert_eq!(
-            parse_command("ρdate > charlie"),
+            parse_command("λdate > charlie"),
             Ok(CoucouCmd::Date(Some("charlie"))),
             "date with target"
         );
@@ -201,12 +201,12 @@ mod test {
     #[test]
     async fn test_joke() {
         assert_eq!(
-            parse_command("ρjoke"),
+            parse_command("λjoke"),
             Ok(CoucouCmd::Joke(None)),
             "joke with no target"
         );
         assert_eq!(
-            parse_command("ρjoke > charlie"),
+            parse_command("λjoke > charlie"),
             Ok(CoucouCmd::Joke(Some("charlie"))),
             "joke with target"
         );
@@ -215,27 +215,27 @@ mod test {
     #[test]
     async fn test_crypto() {
         assert_eq!(
-            parse_command("ρcrypto"),
-            Ok(CoucouCmd::Other("ρcrypto")),
+            parse_command("λcrypto"),
+            Ok(CoucouCmd::Other("λcrypto")),
             "must have something after the command"
         );
         assert_eq!(
-            parse_command("ρcrypto > charlie"),
-            Ok(CoucouCmd::Other("ρcrypto > charlie")),
+            parse_command("λcrypto > charlie"),
+            Ok(CoucouCmd::Other("λcrypto > charlie")),
             "must have a currency"
         );
         assert_eq!(
-            parse_command("ρcrypto lol > charlie"),
+            parse_command("λcrypto lol > charlie"),
             Ok(CoucouCmd::Crypto(Err("lol"), Some("charlie"))),
             "unknown currency"
         );
         assert_eq!(
-            parse_command("ρcrypto xbt > charlie"),
+            parse_command("λcrypto xbt > charlie"),
             Ok(CoucouCmd::Crypto(Ok(CryptoCoin::Bitcoin), Some("charlie"))),
             "known currency with target"
         );
         assert_eq!(
-            parse_command("ρcrypto xbt "),
+            parse_command("λcrypto xbt "),
             Ok(CoucouCmd::Crypto(Ok(CryptoCoin::Bitcoin), None)),
             "known currency without target"
         );
