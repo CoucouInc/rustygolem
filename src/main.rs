@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate tokio;
+extern crate log;
 
 use irc::client::prelude::*;
 #[macro_use]
@@ -45,8 +46,11 @@ struct Opt {
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
+    env_logger::init();
+
     // println!("{:?}", crypto::handle_command(Ok(crypto::CryptoCoin::Bitcoin), Some("charlie")).await);
     // return Ok(());
+
 
     let opt = Opt::from_args();
 

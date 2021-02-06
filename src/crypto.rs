@@ -1,11 +1,10 @@
 use anyhow::{Context, Result};
-use chrono::{Datelike, Utc};
+use chrono::Utc;
 use diesel::serialize::ToSql;
 use diesel::{backend::Backend, prelude::*, sql_types};
 use diesel::{deserialize::FromSql, sql_types::Text};
 use reqwest::Client;
 use serde::Deserialize;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::task;
 
@@ -13,11 +12,12 @@ use crate::schema::crypto_rate::{self, dsl};
 use crate::utils::messages::handle_errors;
 use crate::{db, utils::messages::with_target};
 
-#[derive(Debug, FromSqlRow, AsExpression, PartialEq)]
+#[derive(Debug, FromSqlRow, AsExpression, PartialEq, Clone, Copy)]
 #[sql_type = "Text"]
 pub enum CryptoCoin {
     Bitcoin,
     Ethereum,
+    Doge,
 }
 
 impl<DB> FromSql<sql_types::Text, DB> for CryptoCoin
@@ -45,8 +45,19 @@ where
         let tag = match self {
             CryptoCoin::Bitcoin => "BTC",
             CryptoCoin::Ethereum => "ETH",
+            CryptoCoin::Doge => "DOGE",
         };
         ToSql::<sql_types::Text, DB>::to_sql(tag, out)
+    }
+}
+
+impl std::fmt::Display for CryptoCoin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CryptoCoin::Bitcoin => f.write_str("bitcoin"),
+            CryptoCoin::Ethereum => f.write_str("ethereum"),
+            CryptoCoin::Doge => f.write_str("dogecoin"),
+        }
     }
 }
 
@@ -75,10 +86,16 @@ impl CryptoCoin {
         let symbol = match &self {
             CryptoCoin::Bitcoin => "btc",
             CryptoCoin::Ethereum => "eth",
+            CryptoCoin::Doge => "doge",
+        };
+        let exchange = match &self {
+            CryptoCoin::Bitcoin => "bitstamp",
+            CryptoCoin::Ethereum => "bitstamp",
+            CryptoCoin::Doge => "bittrex",
         };
         let url = format!(
-            "https://api.cryptowat.ch/markets/bitstamp/{}eur/price",
-            symbol
+            "https://api.cryptowat.ch/markets/{}/{}eur/price",
+            exchange, symbol
         );
 
         let json_resp = http_client
@@ -89,6 +106,7 @@ impl CryptoCoin {
             .await
             .context(format!("Error while fetching response from {}", url))?;
 
+        log::info!("cryptowatch response: {:?}", json_resp);
         Ok(json_resp.result.price)
     }
 }
@@ -150,7 +168,7 @@ pub(crate) async fn handle_command(
 ) -> Option<String> {
     let message = match cmd {
         Err(x) => {
-            format!("Dénomination inconnue: {}. Ici on ne deal qu'avec des monnais respectueuses comme btc (aka xbt) et eth.", x)
+            format!("Dénomination inconnue: {}. Ici on ne deal qu'avec des monnais respectueuses comme btc (aka xbt), eth et doge.", x)
         }
         Ok(c) => handle_errors(get_rate_and_history(c).await),
     };
@@ -175,6 +193,7 @@ async fn get_rate_and_history(coin: CryptoCoin) -> Result<String> {
         let now = Utc::now();
         let past_day = dsl::crypto_rate
             .filter(dsl::date.le((now - chrono::Duration::days(1)).naive_utc()))
+            .filter(dsl::coin.eq(coin))
             .order_by(dsl::date.desc())
             .limit(1)
             .load::<CryptoCoinRate>(&conn)?
@@ -183,6 +202,7 @@ async fn get_rate_and_history(coin: CryptoCoin) -> Result<String> {
 
         let past_week = dsl::crypto_rate
             .filter(dsl::date.le((now - chrono::Duration::days(7)).naive_utc()))
+            .filter(dsl::coin.eq(coin))
             .order_by(dsl::date.desc())
             .limit(1)
             .load::<CryptoCoinRate>(&conn)?
@@ -192,23 +212,43 @@ async fn get_rate_and_history(coin: CryptoCoin) -> Result<String> {
         let past_month = dsl::crypto_rate
             // not quite 1 month, but 🤷
             .filter(dsl::date.le((now - chrono::Duration::days(30)).naive_utc()))
+            .filter(dsl::coin.eq(coin))
             .order_by(dsl::date.desc())
             .limit(1)
             .load::<CryptoCoinRate>(&conn)?
             .into_iter()
             .next();
 
-        let result = vec![(past_day, "1D"), (past_week, "1W"), (past_month, "1M")]
+        log::debug!(
+            "current rate: {}, past day: {:?}, past week: {:?}, past month: {:?}",
+            rate,
+            past_day,
+            past_week,
+            past_month
+        );
+
+        let variations = vec![(past_day, "1D"), (past_week, "1W"), (past_month, "1M")]
             .into_iter()
             .filter_map(|(mb_r, suffix)| {
                 mb_r.map(|r| {
-                    let var = RateVariation((rate - r.rate) / rate * 100.0);
+                    let var = RateVariation((((rate - r.rate) * 100.0) / r.rate).abs());
                     format!("{:.02} {}", var, suffix)
                 })
             })
             .collect::<Vec<_>>();
 
-        let x: Result<_> = Ok(result.join(" − "));
+        let variations = if variations.is_empty() {
+            "".to_string()
+        } else {
+            format!("({})", variations.join(" − "))
+        };
+
+        let result = format!(
+            "1 {} vaut {} euros grâce au pouvoir de la spéculation ! {}",
+            coin, rate, variations
+        );
+
+        let x: Result<_> = Ok(result);
         x
     })
     .await?
@@ -219,13 +259,14 @@ struct RateVariation(f32);
 impl std::fmt::Display for RateVariation {
     fn fmt(&self, mut f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let r = self.0;
+        // (↘0.97% 1D − ↗24.25% 1W − ↗43.32% 1M)
 
         match r.partial_cmp(&0.) {
             Some(std::cmp::Ordering::Less) => f.write_str("↘")?,
             Some(std::cmp::Ordering::Greater) => f.write_str("↗")?,
             _ => f.write_str("−")?,
         }
-        r.abs().fmt(&mut f)?;
+        r.fmt(&mut f)?;
         f.write_str("%")?;
         Ok(())
     }

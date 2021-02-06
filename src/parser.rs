@@ -95,6 +95,7 @@ fn crypto_cmd(input: &str) -> IResult<&str, Result<CryptoCoin, &str>> {
         map(tag("xbt"), |_| Ok(CryptoCoin::Bitcoin)),
         map(tag("btc"), |_| Ok(CryptoCoin::Bitcoin)),
         map(tag("eth"), |_| Ok(CryptoCoin::Ethereum)),
+        map(tag("doge"), |_| Ok(CryptoCoin::Doge)),
         map(word, |w| Err(w)),
     ))(input)
 }
