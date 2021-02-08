@@ -29,6 +29,7 @@ where
         match &(String::from_sql(bytes)?)[..] {
             "BTC" => Ok(CryptoCoin::Bitcoin),
             "ETH" => Ok(CryptoCoin::Ethereum),
+            "DOGE" => Ok(CryptoCoin::Doge),
             x => Err(format!("Unknown denomination: {}", x).into()),
         }
     }
