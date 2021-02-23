@@ -232,7 +232,7 @@ async fn get_rate_and_history(coin: CryptoCoin) -> Result<String> {
             .into_iter()
             .filter_map(|(mb_r, suffix)| {
                 mb_r.map(|r| {
-                    let var = RateVariation((((rate - r.rate) * 100.0) / r.rate).abs());
+                    let var = RateVariation(((rate - r.rate) * 100.0) / r.rate);
                     format!("{:.02} {}", var, suffix)
                 })
             })
@@ -267,7 +267,7 @@ impl std::fmt::Display for RateVariation {
             Some(std::cmp::Ordering::Greater) => f.write_str("↗")?,
             _ => f.write_str("−")?,
         }
-        r.fmt(&mut f)?;
+        r.abs().fmt(&mut f)?;
         f.write_str("%")?;
         Ok(())
     }
