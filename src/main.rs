@@ -11,19 +11,19 @@ extern crate diesel;
 #[macro_use]
 extern crate diesel_migrations;
 
-use anyhow::{Result, Context};
-use structopt::StructOpt;
+use anyhow::{Context, Result};
 use std::sync::{Arc, Mutex};
+use structopt::StructOpt;
 
+mod bot;
+mod crypto;
 mod ctcp;
 mod db;
 mod joke;
 mod parser;
 mod republican_calendar;
-mod utils;
-mod crypto;
 mod schema;
-mod bot;
+mod utils;
 
 #[derive(Debug, StructOpt)]
 struct Opt {
@@ -50,7 +50,6 @@ async fn main() -> Result<()> {
 
     // println!("{:?}", crypto::handle_command(Ok(crypto::CryptoCoin::Bitcoin), Some("charlie")).await);
     // return Ok(());
-
 
     let opt = Opt::from_args();
 
@@ -82,20 +81,14 @@ async fn main() -> Result<()> {
     let client = Arc::new(Mutex::new(client));
 
     try_join!(
-        monitor_crypto_coins(),
-        run_bot(&client),
+        async move {
+            crypto::monitor_crypto_coins()
+                .await
+                .context("Monitoring of crypto coins crashed")
+        },
+        async move { bot::run_bot(&client).await.context("Bot crashed") }
     )?;
 
     println!("done");
     Ok(())
-}
-
-// async closures are unstable, so create these function in order to
-// add the anyhow::Context bit
-async fn run_bot(client: &Arc<Mutex<Client>>) -> Result<()> {
-    bot::run_bot(client).await.context("Bot crashed")
-}
-
-async fn monitor_crypto_coins() -> Result<()> {
-    crypto::monitor_crypto_coins().await.context("Monitoring of crypto coins crashed")
 }
