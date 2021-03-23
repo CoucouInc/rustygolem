@@ -8,6 +8,7 @@ use crate::republican_calendar;
 use crate::ctcp;
 use crate::joke;
 use crate::crypto;
+use crate::urbain;
 
 pub async fn run_bot(client: &Arc<Mutex<Client>>) -> Result<()> {
     let blacklisted_users = vec!["coucoubot", "lambdacoucou", "M`arch`ov", "coucoucou"];
@@ -38,6 +39,15 @@ pub async fn run_bot(client: &Arc<Mutex<Client>>) -> Result<()> {
 
         if let Command::PRIVMSG(_source, message) = irc_message.command {
             let parsed_command = parser::parse_command(&message);
+            match &parsed_command {
+                Ok(cmd) => {
+                    match cmd {
+                        parser::CoucouCmd::Other(_) => (),
+                        _ => log::info!("got command: {:?}", cmd),
+                    }
+                },
+                Err(_) => {}
+            };
 
             match parsed_command {
                 Err(err) => {
@@ -63,6 +73,12 @@ pub async fn run_bot(client: &Arc<Mutex<Client>>) -> Result<()> {
                     }
                     parser::CoucouCmd::Crypto(coin, mb_target) => {
                         match crypto::handle_command(coin, mb_target).await {
+                            None => (),
+                            Some(msg) => client.lock().unwrap().send_privmsg(response_target, msg)?,
+                        }
+                    }
+                    parser::CoucouCmd::Urbain(query, mb_target) => {
+                        match urbain::handle_command(query, mb_target).await {
                             None => (),
                             Some(msg) => client.lock().unwrap().send_privmsg(response_target, msg)?,
                         }
