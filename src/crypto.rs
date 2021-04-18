@@ -18,6 +18,7 @@ pub enum CryptoCoin {
     Bitcoin,
     Ethereum,
     Doge,
+    Ripple,
 }
 
 impl<DB> FromSql<sql_types::Text, DB> for CryptoCoin
@@ -30,6 +31,7 @@ where
             "BTC" => Ok(CryptoCoin::Bitcoin),
             "ETH" => Ok(CryptoCoin::Ethereum),
             "DOGE" => Ok(CryptoCoin::Doge),
+            "XRP" => Ok(CryptoCoin::Ripple),
             x => Err(format!("Unknown denomination: {}", x).into()),
         }
     }
@@ -47,6 +49,7 @@ where
             CryptoCoin::Bitcoin => "BTC",
             CryptoCoin::Ethereum => "ETH",
             CryptoCoin::Doge => "DOGE",
+            CryptoCoin::Ripple => "XRP",
         };
         ToSql::<sql_types::Text, DB>::to_sql(tag, out)
     }
@@ -58,6 +61,7 @@ impl std::fmt::Display for CryptoCoin {
             CryptoCoin::Bitcoin => f.write_str("bitcoin"),
             CryptoCoin::Ethereum => f.write_str("ethereum"),
             CryptoCoin::Doge => f.write_str("dogecoin"),
+            CryptoCoin::Ripple => f.write_str("ripple"),
         }
     }
 }
@@ -88,11 +92,13 @@ impl CryptoCoin {
             CryptoCoin::Bitcoin => "btc",
             CryptoCoin::Ethereum => "eth",
             CryptoCoin::Doge => "doge",
+            CryptoCoin::Ripple => "xrp",
         };
         let exchange = match &self {
             CryptoCoin::Bitcoin => "bitstamp",
             CryptoCoin::Ethereum => "bitstamp",
             CryptoCoin::Doge => "bittrex",
+            CryptoCoin::Ripple => "bittrex",
         };
         let url = format!(
             "https://api.cryptowat.ch/markets/{}/{}eur/price",
@@ -130,10 +136,11 @@ pub async fn monitor_crypto_coins() -> Result<()> {
 
 pub async fn get_and_save_all_rates() -> Result<()> {
     let client = reqwest::Client::new();
-    let (btc_rate, eth_rate, doge_rate) = try_join!(
+    let (btc_rate, eth_rate, doge_rate, ripple_rate) = try_join!(
         CryptoCoin::Bitcoin.get_rate_in_euro(&client),
         CryptoCoin::Ethereum.get_rate_in_euro(&client),
         CryptoCoin::Doge.get_rate_in_euro(&client),
+        CryptoCoin::Ripple.get_rate_in_euro(&client),
     )?;
 
     let btc_row = CryptoCoinRate {
@@ -154,10 +161,16 @@ pub async fn get_and_save_all_rates() -> Result<()> {
         rate: doge_rate,
     };
 
+    let ripple_row = CryptoCoinRate {
+        date: chrono::Utc::now().naive_utc(),
+        coin: CryptoCoin::Ripple,
+        rate: ripple_rate,
+    };
+
 
     task::spawn_blocking(move || {
         let conn = db::establish_connection()?;
-        let vals = (&btc_row, &eth_row, &doge_row);
+        let vals = (&btc_row, &eth_row, &doge_row, &ripple_row);
         diesel::insert_into(crypto_rate::table)
             .values(vals)
             .execute(&conn)
@@ -174,7 +187,7 @@ pub(crate) async fn handle_command(
 ) -> Option<String> {
     let message = match cmd {
         Err(x) => {
-            format!("Dénomination inconnue: {}. Ici on ne deal qu'avec des monnais respectueuses comme btc (aka xbt), eth et doge.", x)
+            format!("Dénomination inconnue: {}. Ici on ne deal qu'avec des monnais respectueuses comme btc (aka xbt), eth, doge et xrp.", x)
         }
         Ok(c) => handle_errors(get_rate_and_history(c).await),
     };
