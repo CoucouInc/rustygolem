@@ -2,7 +2,7 @@
 ALTER TABLE crypto_rate RENAME TO crypto_rate_tmp;
 CREATE TABLE crypto_rate (
   date DATETIME NOT NULL,
-  coin TEXT NOT NULL,
+  coin TEXT CHECK(coin in ("BTC", "ETH")) NOT NULL,
   rate REAL NOT NULL,
   PRIMARY KEY(date, coin)
 );
