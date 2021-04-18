@@ -120,10 +120,6 @@ struct CryptoCoinRate {
     rate: f32,
 }
 
-// pub fn test() -> Result<()> {
-//     Ok(())
-// }
-
 /// fetch, and save all crypto rates every minute
 pub async fn monitor_crypto_coins() -> Result<()> {
     loop {
@@ -134,9 +130,10 @@ pub async fn monitor_crypto_coins() -> Result<()> {
 
 pub async fn get_and_save_all_rates() -> Result<()> {
     let client = reqwest::Client::new();
-    let (btc_rate, eth_rate) = try_join!(
+    let (btc_rate, eth_rate, doge_rate) = try_join!(
         CryptoCoin::Bitcoin.get_rate_in_euro(&client),
         CryptoCoin::Ethereum.get_rate_in_euro(&client),
+        CryptoCoin::Doge.get_rate_in_euro(&client),
     )?;
 
     let btc_row = CryptoCoinRate {
@@ -151,12 +148,20 @@ pub async fn get_and_save_all_rates() -> Result<()> {
         rate: eth_rate,
     };
 
+    let doge_row = CryptoCoinRate {
+        date: chrono::Utc::now().naive_utc(),
+        coin: CryptoCoin::Doge,
+        rate: doge_rate,
+    };
+
+
     task::spawn_blocking(move || {
         let conn = db::establish_connection()?;
+        let vals = (&btc_row, &eth_row, &doge_row);
         diesel::insert_into(crypto_rate::table)
-            .values((&btc_row, &eth_row))
+            .values(vals)
             .execute(&conn)
-            .with_context(|| format!("Cannot insert {:?} into db", (&btc_row, &eth_row)))
+            .with_context(|| format!("Cannot insert {:?} into db", vals))
     })
     .await??;
 
