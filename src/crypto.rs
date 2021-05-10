@@ -200,7 +200,7 @@ pub(crate) async fn handle_command(
 ) -> Option<String> {
     let message = match cmd {
         Err(x) => {
-            format!("Dénomination inconnue: {}. Ici on ne deal qu'avec des monnais respectueuses comme btc (aka xbt), eth, doge, xrp et algo.", x)
+            format!("Dénomination inconnue: {}. Ici on ne deal qu'avec des monnais vaguement respectueuses comme btc (aka xbt), eth, doge, xrp et algo.", x)
         }
         Ok(c) => handle_errors(get_rate_and_history(c).await),
     };
