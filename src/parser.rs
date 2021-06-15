@@ -34,7 +34,6 @@ pub enum CoucouCmd<'input> {
     Date(Option<&'input str>),
     Joke(Option<&'input str>),
     Crypto(Result<CryptoCoin, &'input str>, Option<&'input str>),
-    Urbain(Vec<&'input str>, Option<&'input str>),
     Other(&'input str),
 }
 
@@ -42,7 +41,7 @@ pub fn parse_command<'input>(
     input: &'input str,
 ) -> std::result::Result<CoucouCmd<'input>, Error<&str>> {
     all_consuming(terminated(
-        alt((ctcp, date, joke, crypto, urbain, other)),
+        alt((ctcp, date, joke, crypto, other)),
         multispace0,
     ))(input)
     .finish()
@@ -101,16 +100,6 @@ fn crypto_cmd(input: &str) -> IResult<&str, Result<CryptoCoin, &str>> {
         map(tag("algo"), |_| Ok(CryptoCoin::Algorand)),
         map(word, |w| Err(w)),
     ))(input)
-}
-
-fn urbain(input: &str) -> IResult<&str, CoucouCmd> {
-    preceded(
-        command_prefix,
-        map(
-            with_target(tuple((tag("urbain"), many1(preceded(multispace1, word))))),
-            |((_, query), t)| CoucouCmd::Urbain(query, t),
-        ),
-    )(input)
 }
 
 fn other(input: &str) -> IResult<&str, CoucouCmd> {
@@ -251,33 +240,6 @@ mod test {
             parse_command("λcrypto xbt "),
             Ok(CoucouCmd::Crypto(Ok(CryptoCoin::Bitcoin), None)),
             "known currency without target"
-        );
-
-        assert_eq!(
-            parse_command("λurbain coucou"),
-            Ok(CoucouCmd::Urbain(vec!["coucou"], None)),
-            "urbain with single word query"
-        );
-
-        assert_eq!(
-            parse_command("λurbain coucou > target"),
-            Ok(CoucouCmd::Urbain(vec!["coucou"], Some("target"))),
-            "urbain with single word query and target"
-        );
-
-        assert_eq!(
-            parse_command("λurbain coucou and some"),
-            Ok(CoucouCmd::Urbain(vec!["coucou", "and", "some"], None)),
-            "urbain with multiple words query"
-        );
-
-        assert_eq!(
-            parse_command("λurbain coucou and some > target"),
-            Ok(CoucouCmd::Urbain(
-                vec!["coucou", "and", "some"],
-                Some("target")
-            )),
-            "urbain with multiple words query and a target"
         );
     }
 }

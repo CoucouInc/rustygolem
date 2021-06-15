@@ -24,7 +24,6 @@ mod parser;
 mod republican_calendar;
 mod schema;
 mod utils;
-mod urbain;
 
 #[derive(Debug, StructOpt)]
 struct Opt {
