@@ -35,10 +35,10 @@ struct Opt {
     #[structopt(long, default_value = "rustycoucou")]
     nickname: String,
 
-    #[structopt(long, default_value = "chat.freenode.net")]
+    #[structopt(long, default_value = "irc.libera.chat")]
     server: String,
 
-    #[structopt(long, default_value = "7000")]
+    #[structopt(long, default_value = "6668")]
     port: u16,
 
     #[structopt(long)]
