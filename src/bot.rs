@@ -1,16 +1,23 @@
 use anyhow::Result;
-use irc::client::prelude::*;
 use futures::prelude::*;
+use irc::client::prelude::*;
+use std::env;
 use std::sync::{Arc, Mutex};
 
-use crate::parser;
-use crate::republican_calendar;
+use crate::crypto;
 use crate::ctcp;
 use crate::joke;
-use crate::crypto;
+use crate::parser;
+use crate::republican_calendar;
 
 pub async fn run_bot(client: &Arc<Mutex<Client>>) -> Result<()> {
     let blacklisted_users = vec!["coucoubot", "lambdacoucou", "M`arch`ov", "coucoucou"];
+    {
+        client.lock().unwrap().identify()?;
+    }
+
+    sasl_auth(&client)?;
+
     let mut stream = {
         let mut client = client.lock().unwrap();
         client.stream()?
@@ -22,7 +29,7 @@ pub async fn run_bot(client: &Arc<Mutex<Client>>) -> Result<()> {
             None => continue,
         };
 
-        // println!("got a message: {:#?}", irc_message);
+        log::debug!("got a message: {:?}", irc_message);
         let source_nickname = irc_message
             .source_nickname()
             .map(|s| s.to_string())
@@ -44,7 +51,7 @@ pub async fn run_bot(client: &Arc<Mutex<Client>>) -> Result<()> {
                     log::error!("error parsing message: {} from: {}", err, message);
                     let msg = format!("error parsing message: {} from: {}", err, message);
                     client.lock().unwrap().send_privmsg("Geekingfrog", msg)?;
-                },
+                }
                 Ok(cmd) => match cmd {
                     parser::CoucouCmd::CTCP(ctcp) => {
                         ctcp::handle_ctcp(&client, response_target, ctcp)?;
@@ -52,19 +59,25 @@ pub async fn run_bot(client: &Arc<Mutex<Client>>) -> Result<()> {
                     parser::CoucouCmd::Date(mb_target) => {
                         match republican_calendar::handle_command(mb_target) {
                             None => (),
-                            Some(msg) => client.lock().unwrap().send_privmsg(response_target, msg)?,
+                            Some(msg) => {
+                                client.lock().unwrap().send_privmsg(response_target, msg)?
+                            }
                         }
                     }
                     parser::CoucouCmd::Joke(mb_target) => {
                         match joke::handle_command(mb_target).await {
                             None => (),
-                            Some(msg) => client.lock().unwrap().send_privmsg(response_target, msg)?,
+                            Some(msg) => {
+                                client.lock().unwrap().send_privmsg(response_target, msg)?
+                            }
                         }
                     }
                     parser::CoucouCmd::Crypto(coin, mb_target) => {
                         match crypto::handle_command(coin, mb_target).await {
                             None => (),
-                            Some(msg) => client.lock().unwrap().send_privmsg(response_target, msg)?,
+                            Some(msg) => {
+                                client.lock().unwrap().send_privmsg(response_target, msg)?
+                            }
                         }
                     }
                     parser::CoucouCmd::Other(_) => (),
@@ -73,6 +86,29 @@ pub async fn run_bot(client: &Arc<Mutex<Client>>) -> Result<()> {
         }
     }
 
-
     Ok(())
+}
+
+fn sasl_auth(client: &Arc<Mutex<Client>>) -> Result<()> {
+    match env::var("SASL_PASSWORD") {
+        Ok(password) => {
+            log::info!("Authenticating with SASL");
+            let client = client.lock().unwrap();
+            client.send_cap_req(&[Capability::Sasl])?;
+            client.send_sasl_plain()?;
+            let nick = client.current_nickname();
+            let sasl_str = base64::encode(format!("{}\0{}\0{}", nick, nick, password));
+            client.send(Command::AUTHENTICATE(sasl_str))?;
+            log::info!("SASL authenticated (hopefully)");
+            Ok(())
+        }
+        Err(env::VarError::NotPresent) => {
+            log::info!("No SASL_PASSWORD env var found, not authenticating anything.");
+            Ok(())
+        }
+        Err(env::VarError::NotUnicode(os_str)) => Err(anyhow!(
+            "SASL_PASSWORD not valid unicode string! {:?}",
+            os_str
+        )),
+    }
 }

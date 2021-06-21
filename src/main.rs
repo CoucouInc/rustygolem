@@ -31,13 +31,13 @@ struct Opt {
     #[structopt(long)]
     channels: Vec<String>,
 
-    #[structopt(long, default_value = "rustycoucou")]
+    #[structopt(long, default_value = "rustygolem")]
     nickname: String,
 
     #[structopt(long, default_value = "irc.libera.chat")]
     server: String,
 
-    #[structopt(long, default_value = "6668")]
+    #[structopt(long, default_value = "6697")]
     port: u16,
 
     #[structopt(long)]
@@ -47,9 +47,6 @@ struct Opt {
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
     env_logger::init();
-
-    // println!("{:?}", crypto::handle_command(Ok(crypto::CryptoCoin::Bitcoin), Some("charlie")).await);
-    // return Ok(());
 
     let opt = Opt::from_args();
 
@@ -77,7 +74,6 @@ async fn main() -> Result<()> {
     };
 
     let client = Client::from_config(config).await?;
-    client.identify()?;
     let client = Arc::new(Mutex::new(client));
 
     try_join!(
@@ -86,9 +82,8 @@ async fn main() -> Result<()> {
                 .await
                 .context("Monitoring of crypto coins crashed")
         },
-        async move { bot::run_bot(&client).await.context("Bot crashed") }
+        async move { bot::run_bot(&client).await.context("Golem crashed") }
     )?;
 
-    println!("done");
-    Ok(())
+    bail!("Golem exited!")
 }

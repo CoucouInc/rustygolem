@@ -9,7 +9,7 @@ Follow the [diesel getting started guide](https://diesel.rs/guides/getting-start
 Commands are roughly
 
 ```bash
-export DATABASE_URL=rustycoucou.sqlite
+export DATABASE_URL=rustygolem.sqlite
 diesel migration generate <MIGRATION_NAME>
 diesel migration run
 diesel migration redo

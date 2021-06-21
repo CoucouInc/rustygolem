@@ -10,7 +10,7 @@ use crate::{parser::CTCP, republican_calendar::RepublicanDate};
 // the republican calendar (crucial feature right there).
 pub(crate) fn handle_ctcp(client: &Arc<Mutex<Client>>, target: String, ctcp: CTCP) -> Result<()> {
     let msg = match ctcp {
-        CTCP::VERSION => "VERSION rustycoucou".to_string(),
+        CTCP::VERSION => "VERSION rustygolem".to_string(),
         CTCP::TIME => {
             let now = Utc::now();
             let fmt = StrftimeItems::new("%H:%M:%S");
