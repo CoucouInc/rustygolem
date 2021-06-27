@@ -12,6 +12,7 @@ extern crate diesel;
 extern crate diesel_migrations;
 
 use anyhow::{Context, Result};
+use log::info;
 use std::sync::{Arc, Mutex};
 use structopt::StructOpt;
 
@@ -61,7 +62,8 @@ async fn main() -> Result<()> {
     })
     .await?;
 
-    println!("Joining channel(s): {:?}", opt.channels);
+    info!("Joining channel(s): {:?}", opt.channels);
+    let alt_nicks = vec![format!("{}_", opt.nickname), "brokenGolem".to_string()];
 
     let config = Config {
         owners: vec!["Geekingfrog".to_string()],
@@ -70,6 +72,7 @@ async fn main() -> Result<()> {
         port: Some(opt.port),
         use_tls: Some(!opt.disable_tls),
         channels: opt.channels,
+        alt_nicks,
         ..Config::default()
     };
 
