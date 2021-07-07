@@ -376,7 +376,7 @@ fn day_symbol(m: Month, day: u8) -> &'static str {
         (Mes, 16) => "du tabac",
         (Mes, 17) => "de la groseille",
         (Mes, 18) => "de la gesse",
-        (Mes, 19) => "cde la erise",
+        (Mes, 19) => "de la cerise",
         (Mes, 20) => "du parc",
         (Mes, 21) => "de la menthe",
         (Mes, 22) => "du cumin",
