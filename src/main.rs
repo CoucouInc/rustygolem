@@ -13,7 +13,6 @@ extern crate diesel_migrations;
 
 use anyhow::{Context, Result};
 use log::info;
-use std::sync::{Arc, Mutex};
 use structopt::StructOpt;
 
 mod bot;
@@ -24,6 +23,7 @@ mod joke;
 mod parser;
 mod republican_calendar;
 mod schema;
+mod twitch;
 mod utils;
 
 #[derive(Debug, StructOpt)]
@@ -77,7 +77,6 @@ async fn main() -> Result<()> {
     };
 
     let client = Client::from_config(config).await?;
-    let client = Arc::new(Mutex::new(client));
 
     try_join!(
         async move {
@@ -85,8 +84,14 @@ async fn main() -> Result<()> {
                 .await
                 .context("Monitoring of crypto coins crashed")
         },
-        async move { bot::run_bot(&client).await.context("Golem crashed") }
+        async move {
+            let blacklisted_users = vec!["coucoubot", "lambdacoucou", "M`arch`ov", "coucoucou"];
+            bot::Bot::new(client, blacklisted_users)?
+                .run()
+                .await
+                .context("Golem crashed")
+        }
     )?;
 
-    bail!("Golem exited!")
+    Err(anyhow!("Golem exited!"))
 }
