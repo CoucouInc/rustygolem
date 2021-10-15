@@ -2,16 +2,11 @@ use crate::twitch::errors::{self, TwitchError};
 use anyhow::{anyhow, Context};
 use hmac::{Hmac, Mac, NewMac};
 use rocket::{config::Shutdown, request::Outcome, State};
-use std::{
-    collections::HashMap,
-    net::{IpAddr, Ipv4Addr},
-    num::ParseIntError,
-    sync::{Arc, Mutex},
-};
+use std::num::ParseIntError;
 use tokio::sync::mpsc;
 use twitch_api2::eventsub;
 
-use crate::twitch::message::Message;
+use crate::twitch::{config::Config, message::Message};
 
 type HmacSha256 = Hmac<sha2::Sha256>;
 
@@ -29,8 +24,11 @@ struct SigVerifier<'r> {
 }
 
 impl<'r> SigVerifier<'r> {
-    fn verify(&self, body: &[u8]) -> std::result::Result<(), errors::TwitchSigError> {
-        let sub_secret = std::env::var("TWITCH_APP_SECRET")?;
+    fn verify(
+        &self,
+        sub_secret: &str,
+        body: &[u8],
+    ) -> std::result::Result<(), errors::TwitchSigError> {
         let mut mac = HmacSha256::new_from_slice(sub_secret.as_bytes()).unwrap();
         mac.update(self.msg_id.as_bytes());
         mac.update(self.msg_ts.as_bytes());
@@ -103,10 +101,12 @@ async fn webhook_post<'r>(
     st: &State<ServerState>,
 ) -> errors::Result<String> {
     log::debug!("got something from twitch: {:#?}", input);
-    sig_verifier.verify(input.as_bytes()).map_err(|err| {
-        log::error!("Twitch signature verification failed! {:?}", err);
-        errors::TwitchError::InvalidSig(err)
-    })?;
+    sig_verifier
+        .verify(&st.app_secret, input.as_bytes())
+        .map_err(|err| {
+            log::error!("Twitch signature verification failed! {:?}", err);
+            errors::TwitchError::InvalidSig(err)
+        })?;
 
     let payload = twitch_api2::eventsub::Payload::parse(input).expect("good twitch response");
     // dbg!(&payload);
@@ -145,14 +145,17 @@ async fn webhook_post<'r>(
 }
 
 pub struct ServerState {
+    app_secret: String,
     send_chan: mpsc::Sender<Message>,
 }
 
-// TODO pass the config as argument, or read from a given Path
-pub async fn run_server(tx: mpsc::Sender<Message>) -> anyhow::Result<()> {
-    let config = rocket::Config {
-        address: IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
-        port: 7777,
+pub async fn run_server(config: &Config, tx: mpsc::Sender<Message>) -> anyhow::Result<()> {
+    let bind = &config.webhook_bind;
+    let rocket_config = rocket::Config {
+        address: bind
+            .parse()
+            .with_context(|| format!("Cannot parse {} as ipv4 or ipv6", bind))?,
+        port: config.webhook_port,
         shutdown: Shutdown {
             // let the tokio runtime handle termination
             // this effectively disable the grace period in rocket
@@ -163,16 +166,20 @@ pub async fn run_server(tx: mpsc::Sender<Message>) -> anyhow::Result<()> {
         ..rocket::Config::default()
     };
 
-    let server_state = ServerState { send_chan: tx };
+    let server_state = ServerState {
+        app_secret: config.app_secret.clone(),
+        send_chan: tx,
+    };
 
     let result = rocket::build()
         .mount("/", rocket::routes![webhook_post])
-        .configure(config)
+        .configure(rocket_config)
         .manage(server_state)
         .ignite()
-        .await?
+        .await
+        .with_context(|| "Cannot ignite rocket")?
         .launch()
         .await;
-    println!("The webhook server shutdown {:?}", result);
+    log::error!("The webhook server shutdown {:?}", result);
     Err(anyhow!("webhook server shut down"))
 }

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use futures::prelude::*;
 use irc::client::prelude::*;
 use serde::Deserialize;
-use std::env;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
@@ -21,41 +21,74 @@ enum BotMessage {
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
+    blacklisted_users: Vec<String>,
+    sasl_password: Option<String>,
     twitch_module: twitch::config::Config,
+}
+
+#[derive(Debug, Default)]
+struct State {
+    // the index in config.twitch_module.config
+    twitch_module: twitch::state::State,
 }
 
 #[derive(Debug)]
 pub struct Bot {
     irc_client: Arc<Mutex<Client>>,
-    blacklisted_users: Vec<&'static str>,
     config: Config,
+    state: State,
 }
 
 impl Bot {
-    pub fn new(irc_client: Client, blacklisted_users: Vec<&'static str>) -> Result<Self> {
-        // TODO refactor that to create the client from config/args
-        let config = serde_dhall::from_file("bot_config.dhall")
+    pub async fn new_from_config<P>(
+        irc_config: irc::client::data::Config,
+        config_path: P,
+    ) -> Result<Self>
+    where
+        P: AsRef<Path>,
+    {
+        let irc_client = Client::from_config(irc_config).await?;
+        let config = serde_dhall::from_file(config_path)
             .parse::<Config>()
             .with_context(|| "Failed to parse bot config")?;
 
         Ok(Self {
             irc_client: Arc::new(Mutex::new(irc_client)),
-            blacklisted_users,
             config,
+            state: Default::default(),
         })
     }
 
     pub async fn run(&self) -> Result<()> {
-        {
-            self.irc_client.lock().unwrap().identify()?;
-        }
-
         // blocking but shrug
-        sasl_auth(self.irc_client.clone())?;
+        self.authenticate()?;
+        log::info!("Bot identified.");
 
         let (tx, rx) = mpsc::channel(100);
         tokio::try_join!(self.read_messages(tx), self.process_messages(rx))?;
         Ok(())
+    }
+
+    fn authenticate(&self) -> Result<()> {
+        match self.config.sasl_password {
+            None => {
+                log::info!("No SASL_PASSWORD env var found, not authenticating anything.");
+                self.irc_client.lock().unwrap().identify()?;
+                Ok(())
+            }
+            Some(ref password) => {
+                log::info!("Authenticating with SASL");
+                let client = self.irc_client.lock().unwrap();
+                client.send_cap_req(&[Capability::Sasl])?;
+                client.send_sasl_plain()?;
+                let nick = client.current_nickname();
+                let sasl_str = base64::encode(format!("{}\0{}\0{}", nick, nick, password));
+                client.send(Command::AUTHENTICATE(sasl_str))?;
+                client.identify()?;
+                log::info!("SASL authenticated (hopefully)");
+                Ok(())
+            }
+        }
     }
 
     async fn read_messages(&self, tx: mpsc::Sender<BotMessage>) -> Result<()> {
@@ -86,7 +119,12 @@ impl Bot {
             }
             Ok(())
         };
-        tokio::try_join!(twitch::webhook_server::run_server(twitch_tx), consume_msg)?;
+
+        tokio::try_join!(
+            twitch::subscriptions::ensure_subscriptions(&self.config.twitch_module),
+            twitch::webhook_server::run_server(&self.config.twitch_module, twitch_tx),
+            consume_msg
+        )?;
         Ok(())
     }
 
@@ -112,7 +150,7 @@ impl Bot {
             .map(|s| s.to_string())
             .unwrap_or("".to_string());
 
-        if self.blacklisted_users.contains(&&source_nickname[..]) {
+        if self.config.blacklisted_users.contains(&source_nickname) {
             log::debug!(
                 "message from blacklisted user: {}, discarding",
                 source_nickname
@@ -175,7 +213,7 @@ impl Bot {
     }
 
     async fn process_twitch_message(&self, msg: twitch::message::Message) -> Result<()> {
-        log::info!("Got a twitch message! {:?}", msg);
+        log::debug!("Got a twitch message! {:?}", msg);
         match msg {
             twitch::message::Message::StreamOnline(online) => {
                 let target = self
@@ -183,15 +221,18 @@ impl Bot {
                     .twitch_module
                     .watched_streams
                     .iter()
-                    .find(|s| s.nickname == online.broadcaster_user_login);
+                    .enumerate()
+                    .find(|(_, s)| s.nickname == online.broadcaster_user_login);
                 match target {
                     None => log::warn!(
                         "Got a notification for {} but not found in config",
                         online.broadcaster_user_login
                     ),
-                    Some(target) => {
+                    Some((idx, target)) => {
                         // TODO sending message is sync, make that async
                         let client = self.irc_client.lock().expect("irc lock");
+                        self.state.twitch_module.add_stream(idx);
+
                         let message =
                             format!("Le stream de {} est maintenant live !", target.nickname);
                         for chan in &target.irc_channels {
@@ -208,49 +249,32 @@ impl Bot {
                     .twitch_module
                     .watched_streams
                     .iter()
-                    .find(|s| s.nickname == offline.broadcaster_user_login);
+                    .enumerate()
+                    .find(|(_, s)| s.nickname == offline.broadcaster_user_login);
                 log::info!("target found: {:?}", target);
                 match target {
                     None => log::warn!(
                         "Got a notification for {} but not found in config",
                         offline.broadcaster_user_login
                     ),
-                    Some(target) => {
+                    Some((idx, target)) => {
                         // TODO sending message is sync, make that async
-                        let client = self.irc_client.lock().expect("irc lock");
-                        let message =
-                            format!("{} a arreté de streamer pour le moment. N'oubliez pas de like&subscribe.", target.nickname);
-                        for chan in &target.irc_channels {
-                            client.send_privmsg(chan, &message)?;
+                        if self.state.twitch_module.remove_stream(idx) {
+                            let client = self.irc_client.lock().expect("irc lock");
+                            let message =
+                                format!("{} a arreté de streamer pour le moment. N'oubliez pas de like&subscribe.", target.nickname);
+                            for chan in &target.irc_channels {
+                                client.send_privmsg(chan, &message)?;
+                            }
+                        } else {
+                            // this can happen when a streams goes online/offline rapidly,
+                            // twitch only sends the offline event.
+                            log::warn!("Got an offline notification for a stream not marked live");
                         }
                     }
                 };
             }
         }
         Ok(())
-    }
-}
-
-fn sasl_auth(client: Arc<Mutex<Client>>) -> Result<()> {
-    match env::var("SASL_PASSWORD") {
-        Ok(password) => {
-            log::info!("Authenticating with SASL");
-            let client = client.lock().unwrap();
-            client.send_cap_req(&[Capability::Sasl])?;
-            client.send_sasl_plain()?;
-            let nick = client.current_nickname();
-            let sasl_str = base64::encode(format!("{}\0{}\0{}", nick, nick, password));
-            client.send(Command::AUTHENTICATE(sasl_str))?;
-            log::info!("SASL authenticated (hopefully)");
-            Ok(())
-        }
-        Err(env::VarError::NotPresent) => {
-            log::info!("No SASL_PASSWORD env var found, not authenticating anything.");
-            Ok(())
-        }
-        Err(env::VarError::NotUnicode(os_str)) => Err(anyhow!(
-            "SASL_PASSWORD not valid unicode string! {:?}",
-            os_str
-        )),
     }
 }

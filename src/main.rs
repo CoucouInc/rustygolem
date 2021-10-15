@@ -76,8 +76,6 @@ async fn main() -> Result<()> {
         ..Config::default()
     };
 
-    let client = Client::from_config(config).await?;
-
     try_join!(
         async move {
             crypto::monitor_crypto_coins()
@@ -85,8 +83,8 @@ async fn main() -> Result<()> {
                 .context("Monitoring of crypto coins crashed")
         },
         async move {
-            let blacklisted_users = vec!["coucoubot", "lambdacoucou", "M`arch`ov", "coucoucou"];
-            bot::Bot::new(client, blacklisted_users)?
+            bot::Bot::new_from_config(config, "bot_config.dhall")
+                .await?
                 .run()
                 .await
                 .context("Golem crashed")

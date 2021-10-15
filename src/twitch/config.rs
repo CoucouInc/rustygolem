@@ -12,9 +12,24 @@ pub struct StreamSpec {
     pub irc_channels: Vec<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(transparent)]
+pub struct Obfuscated(pub String);
+
+impl std::fmt::Debug for Obfuscated {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<Obfuscated string>")?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub client_id: ClientId,
     pub client_secret: ClientSecret,
+    pub app_secret: String,
     pub watched_streams: Vec<StreamSpec>,
+    pub webhook_bind: String,
+    pub webhook_port: u16,
+    pub callback_uri: Obfuscated,
 }

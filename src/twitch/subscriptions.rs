@@ -1,6 +1,4 @@
-use std::sync::Arc;
-
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use futures::{StreamExt, TryStreamExt};
 
 use twitch_api2::{
@@ -8,35 +6,29 @@ use twitch_api2::{
         stream::{StreamOfflineV1, StreamOnlineV1},
         EventSubscription, EventType,
     },
-    helix::{
-        users::{get_users, User},
-        ClientRequestError, HelixClient, HelixRequestPostError,
-    },
-    twitch_oauth2::{AppAccessToken, ClientId, ClientSecret},
-    types::{EventSubId, UserId, UserName},
+    helix::users::{get_users, User},
+    twitch_oauth2::{AppAccessToken},
+    types::{EventSubId, UserId},
     TwitchClient,
 };
 
+use crate::twitch::config::Config;
 use twitch_api2::{eventsub, helix};
 
-struct TwitchModule {
-    client_id: ClientId,
-    client_secret: ClientSecret,
+struct TwitchModule<'config> {
+    config: &'config Config,
     token: AppAccessToken,
-    callback_uri: String,
     /// users to watch for stream activity
-    known_users: Vec<User>,
+    // known_users: Vec<User>,
     client: helix::HelixClient<'static, reqwest::Client>,
 }
 
-impl std::fmt::Debug for TwitchModule {
+impl std::fmt::Debug for TwitchModule<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TwitchModule")
-            .field("client_id", &self.client_id)
-            .field("client_secret", &self.client_secret)
+            .field("config", &self.config)
             .field("token", &self.token)
-            .field("callback_uri", &self.callback_uri)
-            .field("known_users", &self.known_users)
+            // .field("known_users", &self.known_users)
             .field("client", &"<HelixClient>")
             .finish()
     }
@@ -50,25 +42,20 @@ struct Subscription {
     status: eventsub::Status,
 }
 
-impl TwitchModule {
-    async fn new(client_id: ClientId, client_secret: ClientSecret) -> Result<Self> {
+impl<'config> TwitchModule<'config> {
+    pub async fn new_from_config(config: &'config Config) -> Result<TwitchModule<'config>> {
         let client: TwitchClient<reqwest::Client> = TwitchClient::default();
         let token = AppAccessToken::get_app_access_token(
             &client,
-            client_id.clone(),
-            client_secret.clone(),
-            vec![],
+            config.client_id.clone(),
+            config.client_secret.clone(),
+            vec![], // scopes
         )
         .await?;
 
-        // TODO move that to the config file
-        let callback_uri = "https://irc.geekingfrog.com/touitche/coucou".to_string();
         Ok(Self {
-            client_id,
-            client_secret,
+            config,
             token,
-            callback_uri,
-            known_users: Vec::new(),
             client: helix::HelixClient::default(),
         })
     }
@@ -112,86 +99,45 @@ impl TwitchModule {
     /// Make sure the bot is subscribed to stream.online and stream.offline
     /// for all the given user names (should not be capitalized)
     /// Also unsubscribe from existing subscriptions for user not listed in `user_names`
-    async fn sync_subscriptions(&mut self, user_names: &[UserName]) -> Result<()> {
-        let unknown_users = user_names
-            .iter()
-            .filter_map(
-                |u| match self.known_users.iter().find(|ku| &ku.login == u) {
-                    Some(_) => None,
-                    None => Some(u),
-                },
-            )
-            .cloned()
-            .collect::<Vec<_>>();
+    async fn sync_subscriptions(&self) -> Result<()> {
+        let subs = self.list_subscriptions().await?;
 
-        if !unknown_users.is_empty() {
-            let usr_req = get_users::GetUsersRequest::builder()
-                .login(unknown_users)
-                .build();
-            let users: Vec<User> = self
-                .client
-                .req_get(usr_req, &self.token)
-                .await
-                .with_context(|| "Get users for twitch modules")?
-                .data;
-            self.known_users = users;
-        }
-
-        self.sync_subscriptions_(user_names).await?;
-        Ok(())
-    }
-
-    async fn sync_subscriptions_(&self, user_names: &[UserName]) -> Result<()> {
-        println!("syncing subs for users: {:?}", user_names);
-        let users: Vec<&User> = user_names
-            .iter()
-            .map(|user_name| {
-                self.known_users
-                    .iter()
-                    .find(|u| &u.login == user_name)
-                    .ok_or(anyhow!("Cannot find user with name {}", user_name))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let existing_subs = self.list_subscriptions().await?;
-
-        // delete subscriptions for users not specified
-        futures::stream::iter(
-            existing_subs
-                .iter()
-                .filter(|s| users.iter().find(|u| u.id == s.user_id).is_none())
-                .map(Ok),
-        )
-        .try_for_each_concurrent(5, |s| async move {
-            println!("deleting subscription {:?}", s);
-            self.client
-                .req_delete(
-                    helix::eventsub::DeleteEventSubSubscriptionRequest::builder()
-                        .id(s.id.clone())
-                        .build(),
-                    &self.token,
-                )
-                .await?;
-            let r: Result<()> = Ok(());
-            r
-        })
-        .await?;
-
-        let existing_subs = Arc::new(existing_subs);
-        futures::stream::iter(user_names)
-            .map(Ok)
-            .try_for_each_concurrent(5, |user_name| {
-                let existing_subs = existing_subs.clone();
-                async move {
-                    let user = self
-                        .known_users
+        let users = if self.config.watched_streams.is_empty() {
+            vec![]
+        } else {
+            let users_req = get_users::GetUsersRequest::builder()
+                .login(
+                    self.config
+                        .watched_streams
                         .iter()
-                        .find(|ku| &ku.login == user_name)
-                        .unwrap();
-                    self.sync_user_subscription(&existing_subs[..], user)
-                        .await?;
-                    let r: Result<()> = Ok(());
-                    r
+                        .map(|u| u.nickname.clone())
+                        .collect(),
+                )
+                .build();
+            self.client.req_get(users_req, &self.token).await?.data
+        };
+
+        let subs_to_delete: Vec<EventSubId> = subs
+            .iter()
+            .filter(|s| users.iter().find(|u| s.user_id == u.id).is_none())
+            .map(|s| s.id.clone())
+            .collect();
+
+        futures::stream::iter(subs_to_delete)
+            .map(Ok)
+            .try_for_each_concurrent(5, |s| async move {
+                self.delete_subscription(s).await?;
+                Ok::<(), anyhow::Error>(())
+            })
+            .await?;
+
+        futures::stream::iter(users)
+            .map(Ok)
+            .try_for_each_concurrent(5, |u| {
+                let subs = &subs;
+                async move {
+                    self.sync_user_subscription(subs, u).await?;
+                    Ok::<(), anyhow::Error>(())
                 }
             })
             .await?;
@@ -199,7 +145,22 @@ impl TwitchModule {
         Ok(())
     }
 
-    async fn sync_user_subscription(&self, subs: &[Subscription], user: &User) -> Result<()> {
+    async fn delete_subscription(&self, sub_id: EventSubId) -> Result<()> {
+        log::info!("Deleting subscription with id {}", sub_id);
+        self.client
+            .req_delete(
+                helix::eventsub::DeleteEventSubSubscriptionRequest::builder()
+                    .id(sub_id)
+                    .build(),
+                &self.token,
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    /// Ensure we're subscribed to the given user's stream.{online,offline} events
+    async fn sync_user_subscription(&self, subs: &[Subscription], user: User) -> Result<()> {
         let sub_online = subs
             .iter()
             .find(|s| s.user_id == user.id && matches!(s.type_, EventType::StreamOnline));
@@ -218,7 +179,7 @@ impl TwitchModule {
                         user.id, user.login
                     )
                 })?;
-                println!("Subscribed stream.online for channel {}", user.login);
+                log::info!("Subscribed stream.online for channel {}", user.login);
             }
         };
 
@@ -226,7 +187,7 @@ impl TwitchModule {
             .iter()
             .find(|s| s.user_id == user.id && matches!(s.type_, EventType::StreamOffline));
         match sub_offline {
-            Some(_) => println!(
+            Some(_) => log::info!(
                 "stream offline subscription already exists for user {:?}",
                 user
             ),
@@ -240,7 +201,7 @@ impl TwitchModule {
                         user.id, user.login
                     )
                 })?;
-                println!("Subscribed stream.offline for channel {}", user.login);
+                log::info!("Subscribed stream.offline for channel {}", user.login);
             }
         };
 
@@ -260,7 +221,7 @@ impl TwitchModule {
             .transport(
                 eventsub::Transport::builder()
                     .method(eventsub::TransportMethod::Webhook)
-                    .callback(self.callback_uri.clone())
+                    .callback(self.config.callback_uri.0.clone())
                     .secret(sub_secret)
                     .build(),
             )
@@ -279,108 +240,11 @@ impl TwitchModule {
     }
 }
 
-// TODO: add the list of users as param here
-async fn ensure_subscriptions() -> Result<()> {
-    let mut module = TwitchModule::new(
-        ClientId::from(
-            std::env::var("TWITCH_CLIENT_ID").with_context(|| "TWITCH_CLIENT_ID not found")?,
-        ),
-        ClientSecret::from(
-            std::env::var("TWITCH_CLIENT_SECRET")
-                .with_context(|| "TWITCH_CLIENT_SECRET not found")?,
-        ),
-    )
-    .await?;
-
-    // module.sync_subscriptions(&[]).await?;
-    module.sync_subscriptions(&["geekingfrog".into()]).await?;
+pub async fn ensure_subscriptions(config: &Config) -> Result<()> {
+    TwitchModule::new_from_config(config)
+        .await?
+        .sync_subscriptions()
+        .await?;
 
     Ok(())
 }
-
-// async fn test_subscribe<'a, C>(
-//     helix_client: &'a HelixClient<'a, C>,
-//     token: &AppAccessToken,
-//     user: helix::users::User,
-// ) -> Result<()>
-// where
-//     C: twitch_api2::HttpClient<'a>,
-// {
-//     let cb_uri = "https://irc.geekingfrog.com/touitche/coucou".to_string();
-//     println!("callback uri for test subscription: {}", cb_uri);
-//     let body = helix::eventsub::CreateEventSubSubscriptionBody::builder()
-//         .subscription(
-//             eventsub::stream::StreamOnlineV1::builder()
-//                 .broadcaster_user_id(user.id.clone())
-//                 .build(),
-//         )
-//         .transport(
-//             eventsub::Transport::builder()
-//                 .method(eventsub::TransportMethod::Webhook)
-//                 .callback(cb_uri.clone())
-//                 .secret("coucousecretlolilol".to_string())
-//                 .build(),
-//         )
-//         .build();
-//
-//     let resp = helix_client
-//         .req_post(
-//             helix::eventsub::CreateEventSubSubscriptionRequest::builder().build(),
-//             body,
-//             token,
-//         )
-//         .await;
-//
-//     match resp {
-//         Ok(_) => (),
-//         Err(err) => match err {
-//             // conflict: the subscription already exists, don't crash on that
-//             ClientRequestError::HelixRequestPostError(HelixRequestPostError::Error {
-//                 status,
-//                 ..
-//             }) if status == 409 => {
-//                 println!("Subscription already exists, ignoring.");
-//             }
-//             _ => return Err(err.into()),
-//         },
-//     };
-//
-//     let body = helix::eventsub::CreateEventSubSubscriptionBody::builder()
-//         .subscription(
-//             eventsub::stream::StreamOfflineV1::builder()
-//                 .broadcaster_user_id(user.id)
-//                 .build(),
-//         )
-//         .transport(
-//             eventsub::Transport::builder()
-//                 .method(eventsub::TransportMethod::Webhook)
-//                 .callback(cb_uri.clone())
-//                 .secret("coucousecretlolilol".to_string())
-//                 .build(),
-//         )
-//         .build();
-//
-//     let resp = helix_client
-//         .req_post(
-//             helix::eventsub::CreateEventSubSubscriptionRequest::builder().build(),
-//             body,
-//             token,
-//         )
-//         .await;
-//
-//     match resp {
-//         Ok(_) => (),
-//         Err(err) => match err {
-//             // conflict: the subscription already exists, don't crash on that
-//             ClientRequestError::HelixRequestPostError(HelixRequestPostError::Error {
-//                 status,
-//                 ..
-//             }) if status == 409 => {
-//                 println!("Subscription already exists, ignoring.");
-//             }
-//             _ => return Err(err.into()),
-//         },
-//     };
-//
-//     Ok(())
-// }
