@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use futures::prelude::*;
 use irc::client::prelude::*;
-use serde::Deserialize;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
+use crate::config::BotConfig;
 use crate::crypto;
 use crate::ctcp;
 use crate::joke;
@@ -19,13 +19,6 @@ enum BotMessage {
     Twitch(twitch::message::Message),
 }
 
-#[derive(Debug, Deserialize)]
-pub struct Config {
-    blacklisted_users: Vec<String>,
-    sasl_password: Option<String>,
-    twitch_module: twitch::config::Config,
-}
-
 #[derive(Debug, Default)]
 struct State {
     // the index in config.twitch_module.config
@@ -35,8 +28,9 @@ struct State {
 #[derive(Debug)]
 pub struct Bot {
     irc_client: Arc<Mutex<Client>>,
-    config: Config,
+    config: BotConfig,
     state: State,
+    twitch_client: Option<twitch::client::Client>,
 }
 
 impl Bot {
@@ -48,14 +42,22 @@ impl Bot {
         P: AsRef<Path>,
     {
         let irc_client = Client::from_config(irc_config).await?;
-        let config = serde_dhall::from_file(config_path)
-            .parse::<Config>()
-            .with_context(|| "Failed to parse bot config")?;
+        let config =
+            BotConfig::from_path(config_path).with_context(|| "Failed to parse bot config")?;
+
+        let twitch_client = if config.twitch_module.is_enabled {
+            let conf = config.twitch_module.clone();
+            Some(twitch::client::Client::new_from_config(conf).await?)
+        } else {
+            log::info!("Twitch module disabled");
+            None
+        };
 
         Ok(Self {
             irc_client: Arc::new(Mutex::new(irc_client)),
             config,
             state: Default::default(),
+            twitch_client,
         })
     }
 
@@ -113,18 +115,29 @@ impl Bot {
 
     async fn read_twitch_messages(&self, tx: mpsc::Sender<BotMessage>) -> Result<()> {
         let (twitch_tx, mut twitch_rx) = mpsc::channel(50);
-        let consume_msg = async move {
+        let consume_msg = || async move {
             while let Some(twitch_msg) = twitch_rx.recv().await {
                 tx.send(BotMessage::Twitch(twitch_msg)).await?
             }
-            Ok(())
+            Ok::<(), anyhow::Error>(())
         };
 
-        tokio::try_join!(
-            twitch::subscriptions::ensure_subscriptions(&self.config.twitch_module),
-            twitch::webhook_server::run_server(&self.config.twitch_module, twitch_tx),
-            consume_msg
-        )?;
+        // let tasks: Vec<Box<dyn TryFuture + Unpin>> = vec![consume_msg()];
+        let mut tasks: Vec<Box<dyn Future<Output = Result<()>> + Unpin>> =
+            vec![Box::new(Box::pin(consume_msg()))];
+
+        if self.config.twitch_module.is_enabled {
+            log::info!("Enabling twitch module");
+            tasks.push(Box::new(Box::pin(twitch::client::ensure_subscriptions(
+                self.config.twitch_module.clone(),
+            ))));
+            tasks.push(Box::new(Box::pin(twitch::webhook_server::run_server(
+                &self.config.twitch_module,
+                twitch_tx,
+            ))));
+        }
+
+        futures::future::try_join_all(tasks).await?;
         Ok(())
     }
 
@@ -221,26 +234,41 @@ impl Bot {
                     .twitch_module
                     .watched_streams
                     .iter()
-                    .enumerate()
-                    .find(|(_, s)| s.nickname == online.broadcaster_user_login);
+                    .find(|s| s.nickname == online.broadcaster_user_login);
                 match target {
                     None => log::warn!(
                         "Got a notification for {} but not found in config",
                         online.broadcaster_user_login
                     ),
-                    Some((idx, target)) => {
-                        // TODO sending message is sync, make that async
-                        let client = self.irc_client.lock().expect("irc lock");
-                        self.state.twitch_module.add_stream(idx);
+                    Some(target) => {
+                        let nick = target.nickname.clone();
+                        let stream = self
+                            .twitch_client
+                            .as_ref()
+                            .unwrap()
+                            .get_live_stream(nick.clone())
+                            .await?;
 
-                        let message =
-                            format!("Le stream de {} est maintenant live !", target.nickname);
-                        for chan in &target.irc_channels {
-                            client.send_privmsg(chan, &message)?;
+                        match stream {
+                            None => log::info!("Got stream live notification but twitch returned nothing. TOCTOU :shrug:"),
+                            Some(stream) => {
+
+                                let url = format!("https://www.twitch.tv/{}", &target.nickname);
+                                let message =
+                                    format!("Le stream de {} est maintenant live at {} ({})!",
+                                    target.nickname,
+                                    url, stream.game_name
+                                );
+                                self.state.twitch_module.add_stream(nick, stream);
+                                // TODO sending message is sync, make that async
+                                let client = self.irc_client.lock().expect("irc lock");
+                                for chan in &target.irc_channels {
+                                    client.send_privmsg(chan, &message)?;
+                                }
+                            },
                         }
                     }
                 };
-                log::info!("target found: {:?}", target);
             }
 
             twitch::message::Message::StreamOffline(offline) => {
@@ -249,27 +277,30 @@ impl Bot {
                     .twitch_module
                     .watched_streams
                     .iter()
-                    .enumerate()
-                    .find(|(_, s)| s.nickname == offline.broadcaster_user_login);
-                log::info!("target found: {:?}", target);
+                    .find(|s| s.nickname == offline.broadcaster_user_login);
                 match target {
                     None => log::warn!(
                         "Got a notification for {} but not found in config",
                         offline.broadcaster_user_login
                     ),
-                    Some((idx, target)) => {
+                    Some(target) => {
                         // TODO sending message is sync, make that async
-                        if self.state.twitch_module.remove_stream(idx) {
-                            let client = self.irc_client.lock().expect("irc lock");
-                            let message =
-                                format!("{} a arreté de streamer pour le moment. N'oubliez pas de like&subscribe.", target.nickname);
-                            for chan in &target.irc_channels {
-                                client.send_privmsg(chan, &message)?;
+                        match self.state.twitch_module.remove_stream(&target.nickname) {
+                            None => {
+                                // this can happen when a streams goes online/offline rapidly,
+                                // twitch only sends the offline event.
+                                log::warn!(
+                                    "Got an offline notification for a stream not marked live"
+                                );
                             }
-                        } else {
-                            // this can happen when a streams goes online/offline rapidly,
-                            // twitch only sends the offline event.
-                            log::warn!("Got an offline notification for a stream not marked live");
+                            Some(_s) => {
+                                let client = self.irc_client.lock().expect("irc lock");
+                                let message =
+                                    format!("{} a arreté de streamer pour le moment. N'oubliez pas de like&subscribe.", target.nickname);
+                                for chan in &target.irc_channels {
+                                    client.send_privmsg(chan, &message)?;
+                                }
+                            }
                         }
                     }
                 };

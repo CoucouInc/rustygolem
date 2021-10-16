@@ -25,6 +25,7 @@ mod republican_calendar;
 mod schema;
 mod twitch;
 mod utils;
+mod config;
 
 #[derive(Debug, StructOpt)]
 struct Opt {

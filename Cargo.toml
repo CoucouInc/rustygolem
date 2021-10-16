@@ -34,3 +34,13 @@ serde_dhall = "0.10.1"
 
 [dev-dependencies]
 pretty_assertions = "0.6.1"
+
+
+[[bin]]
+name = "rustygolem"
+path = "src/main.rs"
+
+
+[[bin]]
+name = "testtwitch"
+path = "src/testtwitch.rs"

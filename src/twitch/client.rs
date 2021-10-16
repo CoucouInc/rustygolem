@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
 use futures::{StreamExt, TryStreamExt};
 
@@ -6,26 +8,29 @@ use twitch_api2::{
         stream::{StreamOfflineV1, StreamOnlineV1},
         EventSubscription, EventType,
     },
-    helix::users::{get_users, User},
-    twitch_oauth2::{AppAccessToken},
-    types::{EventSubId, UserId},
+    helix::{
+        streams::{self, Stream},
+        users::{get_users, User},
+    },
+    twitch_oauth2::AppAccessToken,
+    types::{EventSubId, Nickname, UserId},
     TwitchClient,
 };
 
 use crate::twitch::config::Config;
 use twitch_api2::{eventsub, helix};
 
-struct TwitchModule<'config> {
-    config: &'config Config,
-    token: AppAccessToken,
+pub struct Client {
+    pub config: Config,
+    pub token: AppAccessToken,
     /// users to watch for stream activity
     // known_users: Vec<User>,
-    client: helix::HelixClient<'static, reqwest::Client>,
+    pub client: helix::HelixClient<'static, reqwest::Client>,
 }
 
-impl std::fmt::Debug for TwitchModule<'_> {
+impl std::fmt::Debug for Client {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TwitchModule")
+        f.debug_struct("Client")
             .field("config", &self.config)
             .field("token", &self.token)
             // .field("known_users", &self.known_users)
@@ -35,15 +40,26 @@ impl std::fmt::Debug for TwitchModule<'_> {
 }
 
 #[derive(Debug)]
-struct Subscription {
-    id: EventSubId,
-    user_id: UserId,
-    type_: EventType,
-    status: eventsub::Status,
+pub struct Subscription {
+    pub id: EventSubId,
+    pub user_id: UserId,
+    pub type_: EventType,
+    pub status: eventsub::Status,
 }
 
-impl<'config> TwitchModule<'config> {
-    pub async fn new_from_config(config: &'config Config) -> Result<TwitchModule<'config>> {
+impl Subscription {
+    fn is_valid(&self) -> bool {
+        match self.status {
+            eventsub::Status::Enabled | eventsub::Status::WebhookCallbackVerificationPending => {
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Client {
+    pub async fn new_from_config(config: Config) -> Result<Client> {
         let client: TwitchClient<reqwest::Client> = TwitchClient::default();
         let token = AppAccessToken::get_app_access_token(
             &client,
@@ -60,7 +76,59 @@ impl<'config> TwitchModule<'config> {
         })
     }
 
-    async fn list_subscriptions(&self) -> Result<Vec<Subscription>> {
+    pub async fn get_users(&self, nicks: Vec<Nickname>, ids: Vec<UserId>) -> Result<Vec<User>> {
+        if nicks.is_empty() && ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let req = get_users::GetUsersRequest::builder()
+            .id(ids)
+            .login(nicks)
+            .build();
+        Ok(self.client.req_get(req, &self.token).await?.data)
+    }
+
+    /// Returns a hashmap indexed by nickname and live stream information
+    /// Abscence of a key indicates the stream is not live.
+    pub async fn get_live_streams(&self) -> Result<HashMap<Nickname, Stream>> {
+        let user_logins = self
+            .config
+            .watched_streams
+            .iter()
+            .map(|s| s.nickname.clone())
+            .collect();
+        let resp = self
+            .client
+            .req_get(
+                streams::GetStreamsRequest::builder()
+                    .user_login(user_logins)
+                    .build(),
+                &self.token,
+            )
+            .await?;
+
+        Ok(resp
+            .data
+            .into_iter()
+            .map(|s| (s.user_login.clone(), s))
+            .collect())
+    }
+
+    /// returning Ok(None) means the given nick isn't live atm
+    pub async fn get_live_stream(&self, nick: Nickname) -> Result<Option<Stream>> {
+        let mut resp = self
+            .client
+            .req_get(
+                streams::GetStreamsRequest::builder()
+                    .user_login(vec![nick])
+                    .build(),
+                &self.token,
+            )
+            .await?;
+
+        Ok(resp.data.pop())
+    }
+
+    pub async fn list_subscriptions(&self) -> Result<Vec<Subscription>> {
         // TODO: handle pagination
         let resp = self
             .client
@@ -76,6 +144,7 @@ impl<'config> TwitchModule<'config> {
             .subscriptions
             .into_iter()
             .filter_map(|sub| {
+                log::debug!("{:?}", sub);
                 let status = sub.status;
                 let typ = sub.type_;
                 let id = sub.id;
@@ -102,25 +171,29 @@ impl<'config> TwitchModule<'config> {
     async fn sync_subscriptions(&self) -> Result<()> {
         let subs = self.list_subscriptions().await?;
 
-        let users = if self.config.watched_streams.is_empty() {
-            vec![]
-        } else {
-            let users_req = get_users::GetUsersRequest::builder()
-                .login(
-                    self.config
-                        .watched_streams
-                        .iter()
-                        .map(|u| u.nickname.clone())
-                        .collect(),
-                )
-                .build();
-            self.client.req_get(users_req, &self.token).await?.data
-        };
-
-        let subs_to_delete: Vec<EventSubId> = subs
+        let users = self
+            .config
+            .watched_streams
             .iter()
-            .filter(|s| users.iter().find(|u| s.user_id == u.id).is_none())
-            .map(|s| s.id.clone())
+            .map(|u| &u.nickname)
+            .collect::<Vec<_>>();
+        log::info!("Syncing subscription for users {:?}", users);
+
+        let users = self
+            .get_users(
+                self.config
+                    .watched_streams
+                    .iter()
+                    .map(|u| u.nickname.clone())
+                    .collect(),
+                vec![],
+            )
+            .await?;
+
+        let subs_to_delete: Vec<_> = subs
+            .iter()
+            .filter(|s| !s.is_valid() || users.iter().find(|u| s.user_id == u.id).is_none())
+            // .map(|s| s.id.clone())
             .collect();
 
         futures::stream::iter(subs_to_delete)
@@ -130,6 +203,11 @@ impl<'config> TwitchModule<'config> {
                 Ok::<(), anyhow::Error>(())
             })
             .await?;
+
+        let subs = subs
+            .into_iter()
+            .filter(|s| s.is_valid())
+            .collect::<Vec<_>>();
 
         futures::stream::iter(users)
             .map(Ok)
@@ -145,12 +223,12 @@ impl<'config> TwitchModule<'config> {
         Ok(())
     }
 
-    async fn delete_subscription(&self, sub_id: EventSubId) -> Result<()> {
-        log::info!("Deleting subscription with id {}", sub_id);
+    async fn delete_subscription(&self, sub: &Subscription) -> Result<()> {
+        log::info!("Deleting subscription {:?}", sub);
         self.client
             .req_delete(
                 helix::eventsub::DeleteEventSubSubscriptionRequest::builder()
-                    .id(sub_id)
+                    .id(sub.id.clone())
                     .build(),
                 &self.token,
             )
@@ -240,8 +318,8 @@ impl<'config> TwitchModule<'config> {
     }
 }
 
-pub async fn ensure_subscriptions(config: &Config) -> Result<()> {
-    TwitchModule::new_from_config(config)
+pub async fn ensure_subscriptions(config: Config) -> Result<()> {
+    Client::new_from_config(config)
         .await?
         .sync_subscriptions()
         .await?;

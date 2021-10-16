@@ -18,7 +18,10 @@ in
       { nickname = "geekingfrog"
       , irc_nick = "Geekingfrog"
       , irc_channels = ["##arch-fr-free"]
-      }] : List StreamSpec
+      },
+    ] : List StreamSpec
+    -- quick&dirty solution to disable twitch until I get to untangle everything
+    , is_enabled = False
     }
 , blacklisted_users = ["coucoubot", "lambdacoucou", "M`arch`ov", "coucoucou"]
 , sasl_password = Some (env:SASL_PASSWORD as Text) ? None Text
