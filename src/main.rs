@@ -16,16 +16,19 @@ use log::info;
 use structopt::StructOpt;
 
 mod bot;
+mod config;
 mod crypto;
 mod ctcp;
 mod db;
+mod golem;
 mod joke;
 mod parser;
+mod plugin;
+mod plugins;
 mod republican_calendar;
 mod schema;
 mod twitch;
 mod utils;
-mod config;
 
 #[derive(Debug, StructOpt)]
 struct Opt {
@@ -83,13 +86,27 @@ async fn main() -> Result<()> {
                 .await
                 .context("Monitoring of crypto coins crashed")
         },
-        async move {
-            bot::Bot::new_from_config(config, "bot_config.dhall")
-                .await?
-                .run()
-                .await
-                .context("Golem crashed")
-        }
+        {
+            let config = config.clone();
+            async move {
+                bot::Bot::new_from_config(config.clone(), "bot_config.dhall")
+                    .await?
+                    .run()
+                    .await
+                    .context("Golem crashed")
+            }
+        },
+        // create a different bot for the transition to plugins
+        {
+            let config = config.clone();
+            async move {
+                golem::Golem::new_from_config(config)
+                    .await?
+                    .run()
+                    .await
+                    .context("Plugin golem crashed")
+            }
+        },
     )?;
 
     Err(anyhow!("Golem exited!"))
