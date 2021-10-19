@@ -4,9 +4,29 @@ use irc::proto::Message;
 use tokio::sync::mpsc;
 
 #[derive(Debug, thiserror::Error)]
-pub enum Error {}
+#[allow(dead_code)]
+pub enum Error {
+    /// useful when constructing an error from scratch
+    #[error("Generic plugin error {0}")]
+    Synthetic(String),
+
+    #[error("Plugin error from {source:?}")]
+    Wrapped {
+        source: Box<dyn std::error::Error + Send + Sync>,
+        ctx: String,
+    },
+
+    #[error("Generic error")]
+    Generic(#[from] anyhow::Error),
+}
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+// Can't figure out how to automatically convert an Error (+ other bounds)
+// into my plugin::Error, so instead, create this trait to do it.
+pub trait WrapError<T> {
+    fn wrap(self) -> Result<T>;
+}
 
 #[async_trait]
 pub trait Plugin: Sync + Send {
@@ -38,9 +58,9 @@ pub trait Plugin: Sync + Send {
     }
 }
 
-pub async fn new<T>() -> Result<T>
+pub async fn new_boxed<T>() -> Result<Box<dyn Plugin>>
 where
-    T: Plugin,
+    T: Plugin + 'static,
 {
-    Ok(T::init().await?)
+    Ok(Box::new(T::init().await?))
 }

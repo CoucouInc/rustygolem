@@ -15,19 +15,11 @@ use anyhow::{Context, Result};
 use log::info;
 use structopt::StructOpt;
 
-mod bot;
-mod config;
-mod crypto;
-mod ctcp;
-mod db;
 mod golem;
-mod joke;
-mod parser;
 mod plugin;
 mod plugins;
 mod republican_calendar;
 mod schema;
-mod twitch;
 mod utils;
 
 #[derive(Debug, StructOpt)]
@@ -59,13 +51,6 @@ async fn main() -> Result<()> {
         return Err(anyhow!("No channels to join, aborting"));
     }
 
-    let _db_conn: Result<_> = tokio::task::spawn_blocking(|| {
-        let conn = db::establish_connection()?;
-        db::run_migrations(&conn)?;
-        Ok(conn)
-    })
-    .await?;
-
     info!("Joining channel(s): {:?}", opt.channels);
     let alt_nicks = vec![format!("{}_", opt.nickname), "brokenGolem".to_string()];
 
@@ -80,34 +65,11 @@ async fn main() -> Result<()> {
         ..Config::default()
     };
 
-    try_join!(
-        async move {
-            crypto::monitor_crypto_coins()
-                .await
-                .context("Monitoring of crypto coins crashed")
-        },
-        {
-            let config = config.clone();
-            async move {
-                bot::Bot::new_from_config(config.clone(), "bot_config.dhall")
-                    .await?
-                    .run()
-                    .await
-                    .context("Golem crashed")
-            }
-        },
-        // create a different bot for the transition to plugins
-        {
-            let config = config.clone();
-            async move {
-                golem::Golem::new_from_config(config)
-                    .await?
-                    .run()
-                    .await
-                    .context("Plugin golem crashed")
-            }
-        },
-    )?;
+    golem::Golem::new_from_config(config)
+        .await?
+        .run()
+        .await
+        .context("Plugin golem crashed")?;
 
     Err(anyhow!("Golem exited!"))
 }

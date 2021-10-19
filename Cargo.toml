@@ -2,7 +2,7 @@
 name = "rustygolem"
 version = "0.1.0"
 authors = ["Grégoire Charvet 黑瓜 <greg@geekingfrog.com>"]
-edition = "2018"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -11,7 +11,7 @@ anyhow = "1.0.37"
 async-trait = "0.1.51"
 base64 = "0.13.0"
 chrono = "0.4.19"
-diesel = { version = "1.4.5", features = ["sqlite", "chrono"] }
+diesel = { version = "1.4.8", features = ["sqlite", "chrono"] }
 # diesel-derive-enum = { version = "1.1.0", features = ["sqlite"] }
 diesel_migrations = "1.4.0"
 env_logger = "0.8.2"
@@ -25,13 +25,14 @@ reqwest = { version = "^0.11.0", features = ["json"] }
 serde = { version = "1.0.130", features = ["derive"] }
 serde_json = "1.0.61"
 structopt = "0.3.21"
-tokio = { version = "1.0.1", features = ["full"] }
+tokio = { version = "1.12.0", features = ["full"] }
 twitch_api2 = { version = "0.6.0-rc.3", features = ["twitch_oauth2", "helix", "reqwest_client", "eventsub"] }
 rocket = "0.5.0-rc.1"
 hmac = "0.11.0"
 sha2 = "0.9.8"
 thiserror = "1.0.30"
 serde_dhall = "0.10.1"
+http = "0.2.5"
 
 [dev-dependencies]
 pretty_assertions = "0.6.1"

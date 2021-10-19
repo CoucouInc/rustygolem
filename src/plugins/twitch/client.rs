@@ -20,23 +20,13 @@ use twitch_api2::{
 use crate::twitch::config::Config;
 use twitch_api2::{eventsub, helix};
 
-pub struct Client {
+pub struct Client<C> {
     pub config: Config,
     pub token: AppAccessToken,
     /// users to watch for stream activity
     // known_users: Vec<User>,
+    pub auth_client: C,
     pub client: helix::HelixClient<'static, reqwest::Client>,
-}
-
-impl std::fmt::Debug for Client {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Client")
-            .field("config", &self.config)
-            .field("token", &self.token)
-            // .field("known_users", &self.known_users)
-            .field("client", &"<HelixClient>")
-            .finish()
-    }
 }
 
 #[derive(Debug)]
@@ -58,7 +48,7 @@ impl Subscription {
     }
 }
 
-impl Client {
+impl<C> Client<C> {
     pub async fn new_from_config(config: Config) -> Result<Client> {
         let client: TwitchClient<reqwest::Client> = TwitchClient::default();
         let token = AppAccessToken::get_app_access_token(

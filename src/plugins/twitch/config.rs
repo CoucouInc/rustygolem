@@ -1,5 +1,7 @@
+use std::path::Path;
+
 use serde::Deserialize;
-use twitch_api2::{twitch_oauth2::{ClientId, ClientSecret}, types::Nickname};
+use twitch_api2::{eventsub::stream::{StreamOfflineV1Payload, StreamOnlineV1Payload}, twitch_oauth2::{ClientId, ClientSecret}, types::Nickname};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct StreamSpec {
@@ -38,5 +40,36 @@ pub struct Config {
     pub webhook_bind: String,
     pub webhook_port: u16,
     pub callback_uri: Obfuscated,
-    pub is_enabled: bool,
+}
+
+// tmp struct to parse the config from a file with other stuff in it
+#[derive(Deserialize)]
+struct TC{twitch: Config}
+
+
+impl Config {
+    // pub fn from_file<P>(p: P) -> Result<Self, serde_dhall::Error>
+    // where
+    //     P: AsRef<Path>,
+    // {
+    //     Ok(serde_dhall::from_file(p).parse()?)
+    // }
+
+    /// read config from a file where it's under a key
+    /// named "twitch"
+    pub fn from_file_keyed<P>(p: P) -> Result<Self, serde_dhall::Error>
+    where
+        P: AsRef<Path>,
+    {
+        let tmp: TC = serde_dhall::from_file(p).parse()?;
+        Ok(tmp.twitch)
+    }
+
+}
+
+
+#[derive(Debug)]
+pub enum Message {
+    StreamOnline(StreamOnlineV1Payload),
+    StreamOffline(StreamOfflineV1Payload),
 }

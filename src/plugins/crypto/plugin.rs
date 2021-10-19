@@ -1,20 +1,122 @@
-use anyhow::{Context, Result};
+use anyhow::Context;
+use async_trait::async_trait;
 use chrono::Utc;
 use diesel::serialize::ToSql;
 use diesel::{backend::Backend, prelude::*, sql_types};
 use diesel::{deserialize::FromSql, sql_types::Text};
+use nom::branch::alt;
+use nom::bytes::complete::tag;
+use nom::character::complete::{multispace1, multispace0};
+use nom::combinator::{all_consuming, map};
+use nom::sequence::{preceded, terminated, tuple};
+use nom::{Finish, IResult};
 use reqwest::Client;
 use serde::Deserialize;
+use std::result::Result as StdResult;
 use std::time::Duration;
+use tokio::sync::mpsc;
 use tokio::task;
 
+use crate::plugin::{Error, Plugin, Result};
 use crate::schema::crypto_rate::{self, dsl};
-use crate::utils::messages::handle_errors;
-use crate::{db, utils::messages::with_target};
+// use crate::utils::messages::handle_errors;
+use crate::utils::parser::{self, command_prefix};
+// use crate::{db, utils::messages::with_target};
+use super::db;
+use irc::proto::{Command, Message};
+
+pub struct Crypto {}
+
+#[async_trait]
+impl Plugin for Crypto {
+    async fn init() -> Result<Self> {
+        let _db_conn: Result<_> = tokio::task::spawn_blocking(|| {
+            let conn = db::establish_connection()?;
+            db::run_migrations(&conn)?;
+            Ok(conn)
+        })
+        .await
+        .map_err(|e| {
+            let e: anyhow::Error = e.into();
+            e
+        })?;
+
+
+        Ok(Crypto {})
+    }
+
+    fn get_name(&self) -> &'static str {
+        "crypto"
+    }
+
+    async fn in_message(&self, msg: &Message) -> Result<Option<Message>> {
+        in_msg(msg).await
+    }
+
+    async fn run(&self, _bot_chan: mpsc::Sender<Message>) -> Result<()> {
+        monitor_crypto_coins().await?;
+        Err(Error::Synthetic(
+            "crypto coin monitoring job stopped".to_string(),
+        ))
+    }
+}
+
+async fn in_msg(msg: &Message) -> Result<Option<Message>> {
+    let response_target = match msg.response_target() {
+        None => return Ok(None),
+        Some(target) => target.to_string(),
+    };
+
+    if let Command::PRIVMSG(_source, message) = &msg.command {
+        let (mb_coin, mb_target) = match parse_command(message) {
+            Ok(x) => x,
+            Err(_) => return Ok(None),
+        };
+        let msg = match mb_coin {
+            Ok(coin) => get_rate_and_history(coin).await?,
+            Err(x) => {
+                format!("Dénomination inconnue: {}. Ici on ne deal qu'avec des monnais vaguement respectueuses comme btc (aka xbt), eth, doge, xrp et algo.", x)
+            }
+        };
+        let full_msg = crate::utils::messages::with_target(&msg, &mb_target);
+        let irc_message = Command::PRIVMSG(response_target, full_msg).into();
+        return Ok(Some(irc_message));
+    }
+    Ok(None)
+}
+
+fn parse_command(input: &str) -> StdResult<(StdResult<CryptoCoin, &str>, Option<&str>), String> {
+    all_consuming(terminated(parse_crypto, multispace0))(input)
+        .finish()
+        .map(|x| x.1)
+        .map_err(|e| format!("{:?}", e))
+}
+
+fn parse_crypto(input: &str) -> IResult<&str, (StdResult<CryptoCoin, &str>, Option<&str>)> {
+    preceded(
+        command_prefix,
+        map(
+            parser::with_target(tuple((tag("crypto"), multispace1, crypto_cmd))),
+            |((_, _, c), t)| (c, t),
+        ),
+    )(input)
+}
+
+fn crypto_cmd(input: &str) -> IResult<&str, StdResult<CryptoCoin, &str>> {
+    alt((
+        map(tag("xbt"), |_| Ok(CryptoCoin::Bitcoin)),
+        map(tag("btc"), |_| Ok(CryptoCoin::Bitcoin)),
+        map(tag("eth"), |_| Ok(CryptoCoin::Ethereum)),
+        map(tag("doge"), |_| Ok(CryptoCoin::Doge)),
+        map(tag("xrp"), |_| Ok(CryptoCoin::Ripple)),
+        map(tag("algo"), |_| Ok(CryptoCoin::Algorand)),
+        map(parser::word, Err),
+    ))(input)
+}
 
 #[derive(Debug, FromSqlRow, AsExpression, PartialEq, Clone, Copy)]
 #[sql_type = "Text"]
-pub enum CryptoCoin {
+enum CryptoCoin {
     Bitcoin,
     Ethereum,
     Doge,
@@ -91,7 +193,7 @@ struct CryptowatchResponseAllowance {
 }
 
 impl CryptoCoin {
-    async fn get_rate_in_euro(&self, http_client: &Client) -> Result<f32> {
+    async fn get_rate_in_euro(&self, http_client: &Client) -> anyhow::Result<f32> {
         let symbol = match &self {
             CryptoCoin::Bitcoin => "btc",
             CryptoCoin::Ethereum => "eth",
@@ -133,14 +235,14 @@ struct CryptoCoinRate {
 }
 
 /// fetch, and save all crypto rates every minute
-pub async fn monitor_crypto_coins() -> Result<()> {
+async fn monitor_crypto_coins() -> anyhow::Result<()> {
     loop {
         get_and_save_all_rates().await?;
         tokio::time::sleep(Duration::from_secs(60 * 60)).await;
     }
 }
 
-pub async fn get_and_save_all_rates() -> Result<()> {
+async fn get_and_save_all_rates() -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     let (btc_rate, eth_rate, doge_rate, ripple_rate, algo_rate) = try_join!(
         CryptoCoin::Bitcoin.get_rate_in_euro(&client),
@@ -180,7 +282,6 @@ pub async fn get_and_save_all_rates() -> Result<()> {
         rate: algo_rate,
     };
 
-
     task::spawn_blocking(move || {
         let conn = db::establish_connection()?;
         let vals = (&btc_row, &eth_row, &doge_row, &ripple_row, &algo_row);
@@ -194,20 +295,20 @@ pub async fn get_and_save_all_rates() -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn handle_command(
-    cmd: std::result::Result<CryptoCoin, &str>,
-    mb_target: Option<&str>,
-) -> Option<String> {
-    let message = match cmd {
-        Err(x) => {
-            format!("Dénomination inconnue: {}. Ici on ne deal qu'avec des monnais vaguement respectueuses comme btc (aka xbt), eth, doge, xrp et algo.", x)
-        }
-        Ok(c) => handle_errors(get_rate_and_history(c).await),
-    };
-    Some(with_target(&message, &mb_target))
-}
+// async fn handle_command(
+//     cmd: StdResult<CryptoCoin, &str>,
+//     mb_target: Option<&str>,
+// ) -> Option<String> {
+//     let message = match cmd {
+//         Err(x) => {
+//             format!("Dénomination inconnue: {}. Ici on ne deal qu'avec des monnais vaguement respectueuses comme btc (aka xbt), eth, doge, xrp et algo.", x)
+//         }
+//         Ok(c) => handle_errors(get_rate_and_history(c).await),
+//     };
+//     Some(with_target(&message, &mb_target))
+// }
 
-async fn get_rate_and_history(coin: CryptoCoin) -> Result<String> {
+async fn get_rate_and_history(coin: CryptoCoin) -> anyhow::Result<String> {
     let client = reqwest::Client::new();
     let rate = coin.get_rate_in_euro(&client).await?;
     let row = CryptoCoinRate {
@@ -280,8 +381,7 @@ async fn get_rate_and_history(coin: CryptoCoin) -> Result<String> {
             coin, rate, variations
         );
 
-        let x: Result<_> = Ok(result);
-        x
+        Ok(result)
     })
     .await?
 }
@@ -308,7 +408,6 @@ impl std::fmt::Display for RateVariation {
 mod test {
     use super::*;
     use pretty_assertions::assert_eq;
-    use serde_json;
 
     #[test]
     async fn price_from_json() {
@@ -326,5 +425,26 @@ mod test {
             // CryptowatchPrice::from_str(json).map_err(|e| format!("{:?}", e)),
             Ok(expected)
         )
+    }
+
+    #[test]
+    async fn test_crypto() {
+        assert!(
+            parse_command("λcrypto").is_err(),
+            "must have something after the command"
+        );
+
+        assert_eq!(
+            parse_command("λcrypto xbt"),
+            Ok((Ok(CryptoCoin::Bitcoin), None)),
+            "can parse bitcoin"
+        );
+
+        assert_eq!(
+            parse_command("λcrypto wut"),
+            Ok((Err("wut"), None)),
+            "inner error on unknown coin"
+        );
+
     }
 }

@@ -1,12 +1,13 @@
-use crate::twitch::errors::{self, TwitchError};
-use anyhow::{anyhow, Context};
+use crate::plugins::twitch::errors::{self, TwitchError};
+use anyhow::Context;
 use hmac::{Hmac, Mac, NewMac};
 use rocket::{config::Shutdown, request::Outcome, State};
 use std::num::ParseIntError;
 use tokio::sync::mpsc;
 use twitch_api2::eventsub;
 
-use crate::twitch::{config::Config, message::Message};
+use crate::plugin::{self, Error};
+use crate::plugins::twitch::config::{Config, Message};
 
 type HmacSha256 = Hmac<sha2::Sha256>;
 
@@ -96,7 +97,7 @@ impl<'r> rocket::request::FromRequest<'r> for SigVerifier<'r> {
 
 #[rocket::post("/touitche/coucou", data = "<input>")]
 async fn webhook_post<'r>(
-    input: &'r str,
+    input: &str,
     sig_verifier: SigVerifier<'_>,
     st: &State<ServerState>,
 ) -> errors::Result<String> {
@@ -149,7 +150,7 @@ pub struct ServerState {
     send_chan: mpsc::Sender<Message>,
 }
 
-pub async fn run_server(config: &Config, tx: mpsc::Sender<Message>) -> anyhow::Result<()> {
+pub async fn run(config: &Config, tx: mpsc::Sender<Message>) -> plugin::Result<()> {
     let bind = &config.webhook_bind;
     let rocket_config = rocket::Config {
         address: bind
@@ -177,9 +178,9 @@ pub async fn run_server(config: &Config, tx: mpsc::Sender<Message>) -> anyhow::R
         .manage(server_state)
         .ignite()
         .await
-        .with_context(|| "Cannot ignite rocket")?
+        .context("Cannot ignite rocket")?
         .launch()
         .await;
     log::error!("The webhook server shutdown {:?}", result);
-    Err(anyhow!("webhook server shut down"))
+    Err(Error::Synthetic("twitch webhook server shut down".to_string()))
 }

@@ -1,41 +1,80 @@
-use anyhow::{Context, Result};
-use twitch::client::Client as TwitchClient;
+#![allow(dead_code)]
 
-mod config;
-mod twitch;
+use std::pin::Pin;
+use twitch_api2::HelixClient;
+// use twitch_api2::twitch_oauth2::client::Client;
+use twitch_api2::{twitch_oauth2::AppAccessToken, types::UserId};
 
-// use crate::twitch::config::Config;
+trait ATrait {
+    fn run<'async_trait>(
+        &'async_trait self,
+    ) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + 'async_trait>>
+    where
+        Self: Sync;
+}
+
+#[derive(Default)]
+struct Coucou {
+    // client: TwitchClient<'static, reqwest::Client>,
+    // client: C,
+    // client: HelixClient<'a, reqwest::Client>,
+    auth_client: reqwest::Client,
+    helix_client: HelixClient<'static, reqwest::Client>,
+}
+
+
+impl ATrait for Coucou
+where
+    // for<'a> 'c: 'a,
+    // for<'c> OC: twitch_api2::twitch_oauth2::client::Client<'c>,
+    // C: twitch_api2::
+{
+    fn run<'async_trait>(
+        &'async_trait self,
+    ) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + 'async_trait>>
+    where
+        Self: Sync,
+    {
+        async fn _run(_self: &Coucou)
+        where
+            // for<'a> Cl: Client<'a> + twitch_api2::twitch_oauth2::client::Client<'a>,
+            // for<'a> OC: twitch_api2::twitch_oauth2::client::Client<'a>,
+        {
+            // for _ in 0..5 {
+            //     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            //     println!("running!");
+            // }
+
+            let token = AppAccessToken::get_app_access_token(
+                &_self.auth_client,
+                "clientid".into(),
+                "secret".into(),
+                vec![],
+            )
+            .await
+            .unwrap();
+
+            let uid: UserId = "uid".into();
+            _self.helix_client.get_user_from_id(uid, &token).await.unwrap();
+            println!("done");
+        }
+
+        Box::pin(_run(self))
+    }
+}
+
+// impl<C> twitch_api2
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    env_logger::init();
-    let config = config::BotConfig::from_path("bot_config.dhall")
-        .with_context(|| "Failed to parse bot config")?;
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let req_client = reqwest::Client::default();
+    let helix_client = HelixClient::with_client(req_client.clone());
 
-    let tm = TwitchClient::new_from_config(config.twitch_module).await?;
-
-    // let subs = tm.list_subscriptions().await?;
-    // for sub in &subs {
-    //     println!("{:?}", sub);
-    // }
-
-    // let users = tm
-    //     .get_users(vec![], subs.iter().map(|s| s.user_id.clone()).collect())
-    //     .await?;
-    // for user in &users {
-    //     println!("--------------------------------------------------");
-    //     println!("{:#?}", user);
-    // }
-
-    let resp = tm
-        .client
-        .get_channel_from_login("artart78".to_string(), &tm.token)
-        .await?;
-    println!("{:?}", resp);
-
-    let resp = tm.get_live_streams().await?;
-
-    println!("{:?}", resp);
+    let c = Coucou {
+        auth_client: req_client,
+        helix_client,
+    };
+    c.run().await;
 
     Ok(())
 }

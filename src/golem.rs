@@ -1,30 +1,62 @@
-use crate::plugin::Plugin;
+use crate::plugin::{self, Plugin};
 use crate::plugins;
 use anyhow::{Context, Result};
 use futures::prelude::*;
 use irc::proto::Message;
+use serde::Deserialize;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot};
 
+#[derive(Debug, Deserialize)]
+struct GolemConfig {
+    blacklisted_users: Vec<String>,
+    plugins: Vec<String>,
+}
+
+impl GolemConfig {
+    pub fn from_path<P>(config_path: P) -> std::result::Result<GolemConfig, serde_dhall::Error>
+    where
+        P: AsRef<Path>,
+    {
+        serde_dhall::from_file(config_path).parse::<GolemConfig>()
+    }
+}
+
 pub struct Golem {
     irc_client: Arc<Mutex<irc::client::Client>>,
+    sasl_password: Option<String>,
+    blacklisted_users: Vec<String>,
+    plugins: Vec<String>,
 }
 
 impl Golem {
+    #[allow(dead_code)]
     pub async fn new_from_config(irc_config: irc::client::data::Config) -> Result<Self> {
         let irc_client = irc::client::Client::from_config(irc_config).await?;
+        let conf = GolemConfig::from_path("golem_config.dhall")?;
+
         Ok(Self {
             irc_client: Arc::new(Mutex::new(irc_client)),
+            sasl_password: None,
+            blacklisted_users: conf.blacklisted_users,
+            plugins: conf.plugins,
         })
     }
 
     pub async fn run(&self) -> Result<()> {
         // blocking but shrug
-        self.irc_client.lock().unwrap().identify()?;
-        log::info!("authed");
+        self.authenticate()
+            .context("Problem while authenticating")?;
 
-        // let ps = vec![Box::new(crate::plugin::new::<plugins::Echo>().await?) as Box<dyn Plugin>];
-        let ps: Vec<Box<dyn Plugin>> = Vec::new();
+        let ps = stream::iter(&self.plugins)
+            .map(|name| async move { init_plugin(name).await })
+            .buffer_unordered(10)
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+
         let (tx, rx) = mpsc::channel(10);
         tokio::try_join!(
             self.recv_irc_messages(tx.clone()),
@@ -36,6 +68,28 @@ impl Golem {
         Ok(())
     }
 
+    fn authenticate(&self) -> Result<()> {
+        match self.sasl_password {
+            None => {
+                log::info!("No SASL_PASSWORD env var found, not authenticating anything.");
+                self.irc_client.lock().unwrap().identify()?;
+                Ok(())
+            }
+            Some(ref password) => {
+                log::info!("Authenticating with SASL");
+                let client = self.irc_client.lock().unwrap();
+                client.send_cap_req(&[irc::proto::Capability::Sasl])?;
+                client.send_sasl_plain()?;
+                let nick = client.current_nickname();
+                let sasl_str = base64::encode(format!("{}\0{}\0{}", nick, nick, password));
+                client.send(irc::proto::Command::AUTHENTICATE(sasl_str))?;
+                client.identify()?;
+                log::info!("SASL authenticated (hopefully)");
+                Ok(())
+            }
+        }
+    }
+
     async fn recv_irc_messages(&self, tx: mpsc::Sender<Message>) -> Result<()> {
         let mut stream = {
             let mut client = self.irc_client.lock().unwrap();
@@ -43,6 +97,13 @@ impl Golem {
         };
 
         while let Some(irc_message) = stream.next().await.transpose()? {
+            if let Some(source) = irc_message.source_nickname() {
+                if self.blacklisted_users.contains(&source.to_string()) {
+                    log::debug!("message from blacklisted user: {}, discarding", source);
+                    return Ok(());
+                }
+            }
+
             tx.send(irc_message).await?
         }
         Ok(())
@@ -54,7 +115,7 @@ impl Golem {
         mut rx: mpsc::Receiver<Message>,
     ) -> Result<()> {
         while let Some(irc_message) = rx.recv().await {
-            self.process_message(&ps, irc_message).await?;
+            self.process_message(ps, irc_message).await?;
         }
         Ok(())
     }
@@ -62,25 +123,23 @@ impl Golem {
     async fn process_message(&self, ps: &[Box<dyn Plugin>], irc_message: Message) -> Result<()> {
         log::debug!("Got an irc message: {:?}", irc_message);
         // TODO don't crash if a plugin returns an error
-        let messages = plugins_in_messages(&ps, &irc_message)
+        let messages = plugins_in_messages(ps, &irc_message)
             .await
             .with_context(|| "Plugin error !")?;
         let client = self.irc_client.lock().expect("lock golem irc client");
-        for msg in messages {
-            if let Some(msg) = msg {
-                // TODO don't crash if a plugin returns an error
-                futures::stream::iter(ps.iter())
-                    .map(Ok)
-                    .try_for_each_concurrent(5, |plugin| {
-                        let msg = &msg;
-                        async move {
-                            plugin.out_message(&msg).await?;
-                            Ok::<(), anyhow::Error>(())
-                        }
-                    })
-                    .await?;
-                client.send(msg)?;
-            }
+        for msg in messages.into_iter().flatten() {
+            // TODO don't crash if a plugin returns an error
+            futures::stream::iter(ps.iter())
+                .map(Ok)
+                .try_for_each_concurrent(5, |plugin| {
+                    let msg = &msg;
+                    async move {
+                        plugin.out_message(msg).await?;
+                        Ok::<(), anyhow::Error>(())
+                    }
+                })
+                .await?;
+            client.send(msg)?;
         }
 
         Ok(())
@@ -102,7 +161,7 @@ async fn plugins_in_messages(
                 .in_message(msg)
                 .await
                 .with_context(|| format!("in_message error from plugin {}", plugin.get_name()))?;
-            if let Err(_) = tx.send(mb_msg) {
+            if tx.send(mb_msg).is_err() {
                 return Err(anyhow!("cannot send plugin message !"));
             }
             Ok::<(), anyhow::Error>(())
@@ -129,4 +188,20 @@ async fn run_plugins(plugins: &[Box<dyn Plugin>], tx: mpsc::Sender<Message>) -> 
     });
     futures::future::try_join_all(x).await?;
     Ok(())
+}
+
+async fn init_plugin(name: &str) -> Result<Box<dyn Plugin>> {
+    // TODO: generate a macro which automatically match the name
+    // with the correct module based on the exports of crate::plugins
+    let plugin = match name {
+        "crypto" => plugin::new_boxed::<plugins::Crypto>().await,
+        "ctcp" => plugin::new_boxed::<plugins::Ctcp>().await,
+        "joke" => plugin::new_boxed::<plugins::Joke>().await,
+        "republican_calendar" => plugin::new_boxed::<plugins::RepublicanCalendar>().await,
+        "twitch" => plugin::new_boxed::<plugins::Twitch>().await,
+        _ => return Err(anyhow!("Unknown plugin name: {}", name)),
+    };
+    let plugin = plugin.with_context(|| format!("Cannot initalize plugin {}", name))?;
+    log::info!("Plugin initialized: {}", name);
+    Ok(plugin)
 }
