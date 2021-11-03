@@ -26,8 +26,6 @@ pub fn word<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a 
     recognize(many1(alphanumeric1))(input)
 }
 
-
-
 /// Utility to parse common command prefix
 pub fn command_prefix(input: &str) -> nom::IResult<&str, &str> {
     nom::branch::alt((
@@ -51,4 +49,43 @@ pub fn single_command<'input>(
         .finish()
         .map(|x| x.1)
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    async fn test_parse_single_command() {
+        assert_eq!(
+            single_command("coucou", "coucou"),
+            None,
+            "need the command prefix"
+        );
+
+        assert_eq!(
+            single_command("coucou", "&other"),
+            None,
+            "only parses given word"
+        );
+
+        assert_eq!(
+            single_command("coucou", "&coucou"),
+            Some(None),
+            "can parse single command"
+        );
+
+        assert_eq!(
+            single_command("coucou", "&other > charlie"),
+            None,
+            "target doesn't impact given word"
+        );
+
+        assert_eq!(
+            single_command("coucou", "&coucou > charlie"),
+            Some(Some("charlie")),
+            "also parses with target"
+        );
+    }
 }

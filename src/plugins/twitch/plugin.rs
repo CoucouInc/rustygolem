@@ -196,6 +196,7 @@ impl Twitch {
                             "Le stream de {} est maintenant live at {} ({})!",
                             target.nickname, url, game
                         );
+                        log::info!("Stream online: {}", &message);
                         self.state.add_stream(nick.clone(), stream);
                         for chan in &target.irc_channels {
                             tx.send(Command::PRIVMSG(chan.clone(), message.clone()).into())
@@ -234,6 +235,7 @@ impl Twitch {
                     Some(_s) => {
                         let message =
                                     format!("{} a arreté de streamer pour le moment. N'oubliez pas de like&subscribe.", target.nickname);
+                        log::info!("Stream offline: {}", &message);
                         for chan in &target.irc_channels {
                             tx.send(Command::PRIVMSG(chan.clone(), message.clone()).into())
                                 .await
@@ -323,9 +325,9 @@ where
 fn format_stream(stream: &Stream) -> String {
     let game = stream.game_name.to_string();
     let game = if game.is_empty() {
-        format!("({})", game)
-    } else {
         "".to_string()
+    } else {
+        format!("({})", game)
     };
     format!(
         "{} {} started at {}",

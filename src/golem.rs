@@ -59,9 +59,9 @@ impl Golem {
 
         let (tx, rx) = mpsc::channel(10);
         tokio::try_join!(
-            self.recv_irc_messages(tx.clone()),
+            run_plugins(&ps[..], tx.clone()),
+            self.recv_irc_messages(tx),
             self.process_messages(&ps[..], rx),
-            run_plugins(&ps[..], tx),
         )?;
 
         log::error!("golem exited");
@@ -100,13 +100,13 @@ impl Golem {
             if let Some(source) = irc_message.source_nickname() {
                 if self.blacklisted_users.contains(&source.to_string()) {
                     log::debug!("message from blacklisted user: {}, discarding", source);
-                    return Ok(());
+                    continue;
                 }
             }
 
             tx.send(irc_message).await?
         }
-        Ok(())
+        Err(anyhow!("IRC receiving stream exited".to_string()))
     }
 
     async fn process_messages(
@@ -117,7 +117,7 @@ impl Golem {
         while let Some(irc_message) = rx.recv().await {
             self.process_message(ps, irc_message).await?;
         }
-        Ok(())
+        Err(anyhow!("Message processing stopped"))
     }
 
     async fn process_message(&self, ps: &[Box<dyn Plugin>], irc_message: Message) -> Result<()> {
