@@ -193,7 +193,7 @@ impl Twitch {
                             format!("({})", game)
                         };
                         let message = format!(
-                            "Le stream de {} est maintenant live at {} ({})!",
+                            "Le stream de {} est maintenant live at {} {}!",
                             target.nickname, url, game
                         );
                         log::info!("Stream online: {}", &message);
