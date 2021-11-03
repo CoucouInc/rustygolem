@@ -199,7 +199,9 @@ impl Twitch {
                         log::info!("Stream online: {}", &message);
                         self.state.add_stream(nick.clone(), stream);
                         for chan in &target.irc_channels {
-                            tx.send(Command::PRIVMSG(chan.clone(), message.clone()).into())
+                            let cmd = Command::PRIVMSG(chan.clone(), message.clone()).into();
+                            log::info!("Stream online command to chan: {}, {:?}", &chan, &cmd);
+                            tx.send(cmd)
                                 .await
                                 .with_context(|| format!("can't send message to {}", &chan))?;
                         }

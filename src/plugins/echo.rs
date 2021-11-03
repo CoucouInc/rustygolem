@@ -21,9 +21,13 @@ impl Plugin for Echo {
         in_msg(msg).await
     }
 
-    async fn run(&self, _bot_chan: mpsc::Sender<Message>) -> Result<()> {
+    async fn run(&self, bot_chan: mpsc::Sender<Message>) -> Result<()> {
+        tokio::time::sleep(Duration::from_secs(10)).await;
         loop {
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            let msg =
+                Command::PRIVMSG("##gougoutest".to_string(), "still alive!".to_string()).into();
+            bot_chan.send(msg).await.unwrap();
             log::info!("echo plugin still running");
         }
     }
