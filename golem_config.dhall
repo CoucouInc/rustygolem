@@ -38,6 +38,10 @@ let twitch =
     , irc_nick = "Juantitor"
     , irc_channels = ["##arch-fr-free"]
     },
+    { nickname = "chouhartem"
+    , irc_nick = "Chouhartem"
+    , irc_channels = ["##arch-fr-free"]
+    },
     { nickname = "geekingfrog"
     , irc_nick = "Geekingfrog"
     , irc_channels = ["##arch-fr-free"]
