@@ -389,7 +389,7 @@ async fn get_rate_and_history(coin: CryptoCoin) -> anyhow::Result<String> {
 struct RateVariation(f32);
 
 impl std::fmt::Display for RateVariation {
-    fn fmt(&self, mut f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let r = self.0;
         // (↘0.97% 1D − ↗24.25% 1W − ↗43.32% 1M)
 
@@ -398,7 +398,7 @@ impl std::fmt::Display for RateVariation {
             Some(std::cmp::Ordering::Greater) => f.write_str("↗")?,
             _ => f.write_str("−")?,
         }
-        r.abs().fmt(&mut f)?;
+        r.abs().fmt(f)?;
         f.write_str("%")?;
         Ok(())
     }

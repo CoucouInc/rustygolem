@@ -12,6 +12,7 @@ use tokio::sync::{mpsc, oneshot};
 struct GolemConfig {
     blacklisted_users: Vec<String>,
     plugins: Vec<String>,
+    sasl_password: Option<String>,
 }
 
 impl GolemConfig {
@@ -45,7 +46,7 @@ impl Golem {
 
         Ok(Self {
             irc_client: Arc::new(Mutex::new(irc_client)),
-            sasl_password: None,
+            sasl_password: conf.sasl_password,
             blacklisted_users: conf.blacklisted_users,
             plugins,
         })
