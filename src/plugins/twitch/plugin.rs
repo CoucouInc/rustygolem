@@ -9,10 +9,18 @@ use irc::client::prelude::Command;
 use irc::proto::Message as IrcMessage;
 use tokio::sync::mpsc;
 use twitch_api2::{
-    eventsub::stream::{StreamOfflineV1Payload, StreamOnlineV1Payload},
-    helix::streams::{self, Stream},
+    eventsub::{
+        self,
+        stream::{StreamOfflineV1, StreamOfflineV1Payload, StreamOnlineV1, StreamOnlineV1Payload},
+        EventSubscription, EventType,
+    },
+    helix::{
+        self,
+        streams::{self, Stream},
+        users::{get_users, User},
+    },
     twitch_oauth2::AppAccessToken,
-    types::Nickname,
+    types::{EventSubId, Nickname, UserId},
     HelixClient,
 };
 
@@ -23,6 +31,26 @@ use crate::plugins::twitch::{
 };
 
 use crate::utils::parser;
+use futures::{StreamExt, TryStreamExt};
+
+#[derive(Debug)]
+pub struct Subscription {
+    pub id: EventSubId,
+    pub user_id: UserId,
+    pub type_: EventType,
+    pub status: eventsub::Status,
+}
+
+impl Subscription {
+    fn is_valid(&self) -> bool {
+        match self.status {
+            eventsub::Status::Enabled | eventsub::Status::WebhookCallbackVerificationPending => {
+                true
+            }
+            _ => false,
+        }
+    }
+}
 
 struct WrappedToken(AppAccessToken);
 
@@ -123,6 +151,7 @@ impl Plugin for Twitch {
     }
 
     async fn run(&self, tx: mpsc::Sender<irc::proto::Message>) -> Result<()> {
+        self.sync_subscriptions().await?;
         self.state.add_streams(self.get_live_streams().await?);
 
         let (twitch_tx, mut twitch_rx) = mpsc::channel(50);
@@ -151,17 +180,17 @@ impl Twitch {
         log::debug!("Got a twitch message! {:?}", msg);
         match msg {
             Message::StreamOnline(online) => {
-                self.stream_online(tx, online).await?;
+                self.on_stream_online(tx, online).await?;
             }
 
             Message::StreamOffline(offline) => {
-                self.stream_offline(tx, offline).await?;
+                self.on_stream_offline(tx, offline).await?;
             }
         }
         Ok(())
     }
 
-    async fn stream_online(
+    async fn on_stream_online(
         &self,
         tx: &mpsc::Sender<irc::proto::Message>,
         online: StreamOnlineV1Payload,
@@ -212,7 +241,7 @@ impl Twitch {
         Ok(())
     }
 
-    async fn stream_offline(
+    async fn on_stream_offline(
         &self,
         tx: &mpsc::Sender<irc::proto::Message>,
         offline: StreamOfflineV1Payload,
@@ -314,6 +343,226 @@ impl Twitch {
             }
         }
         Ok(None)
+    }
+
+    /// Make sure the bot is subscribed to stream.online and stream.offline
+    /// for all the given user names (should not be capitalized)
+    /// Also unsubscribe from existing subscriptions for user not listed in `user_names`
+    async fn sync_subscriptions(&self) -> Result<()> {
+        let subs = self.list_subscriptions().await?;
+
+        let users = self
+            .config
+            .watched_streams
+            .iter()
+            .map(|u| &u.nickname)
+            .collect::<Vec<_>>();
+        log::info!("Syncing subscription for users {:?}", users);
+
+        let users = self
+            .get_users(
+                self.config
+                    .watched_streams
+                    .iter()
+                    .map(|u| u.nickname.clone())
+                    .collect(),
+                vec![],
+            )
+            .await?;
+
+        let subs_to_delete: Vec<_> = subs
+            .iter()
+            .filter(|s| !s.is_valid() || !users.iter().any(|u| s.user_id == u.id))
+            .collect();
+
+        futures::stream::iter(subs_to_delete)
+            .map(Ok)
+            .try_for_each_concurrent(5, |s| async move {
+                self.delete_subscription(s).await?;
+                Ok::<(), anyhow::Error>(())
+            })
+            .await?;
+
+        let subs = subs
+            .into_iter()
+            .filter(|s| s.is_valid())
+            .collect::<Vec<_>>();
+
+        futures::stream::iter(users)
+            .map(Ok)
+            .try_for_each_concurrent(5, |u| {
+                let subs = &subs;
+                async move {
+                    self.sync_user_subscription(subs, u).await?;
+                    Ok::<(), anyhow::Error>(())
+                }
+            })
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn get_users(&self, nicks: Vec<Nickname>, ids: Vec<UserId>) -> Result<Vec<User>> {
+        if nicks.is_empty() && ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let req = get_users::GetUsersRequest::builder()
+            .id(ids)
+            .login(nicks)
+            .build();
+        let user_resp = self
+            .client
+            .req_get(req, self.token.get())
+            .await
+            .map_err(|e| crate::plugin::Error::Wrapped {
+                source: Box::new(e),
+                ctx: "cannot list subscriptions".to_string(),
+            })?;
+
+        Ok(user_resp.data)
+    }
+
+    pub async fn list_subscriptions(&self) -> Result<Vec<Subscription>> {
+        // TODO: handle pagination
+        let resp = self
+            .client
+            .req_get(
+                helix::eventsub::GetEventSubSubscriptionsRequest::builder().build(),
+                self.token.get(),
+            )
+            .await
+            .map_err(|e| crate::plugin::Error::Wrapped {
+                source: Box::new(e),
+                ctx: "cannot list subscriptions".to_string(),
+            })?;
+        // dbg!(&resp);
+
+        let subs = resp
+            .data
+            .subscriptions
+            .into_iter()
+            .filter_map(|sub| {
+                let status = sub.status;
+                let typ = sub.type_;
+                let id = sub.id;
+
+                sub.condition
+                    .as_object()
+                    .and_then(|condition| condition.get("broadcaster_user_id"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| Subscription {
+                        id,
+                        user_id: UserId::new(s),
+                        type_: typ,
+                        status,
+                    })
+            })
+            .collect::<Vec<_>>();
+
+        Ok(subs)
+    }
+
+    async fn delete_subscription(&self, sub: &Subscription) -> Result<()> {
+        log::info!("Deleting subscription {:?}", sub);
+        self.client
+            .req_delete(
+                helix::eventsub::DeleteEventSubSubscriptionRequest::builder()
+                    .id(sub.id.clone())
+                    .build(),
+                self.token.get(),
+            )
+            .await
+            .map_err(|e| crate::plugin::Error::Wrapped {
+                source: Box::new(e),
+                ctx: format!("Failed to delete subscription {:?}", sub),
+            })?;
+
+        Ok(())
+    }
+
+    /// Ensure we're subscribed to the given user's stream.{online,offline} events
+    async fn sync_user_subscription(&self, subs: &[Subscription], user: User) -> Result<()> {
+        let sub_online = subs
+            .iter()
+            .find(|s| s.user_id == user.id && matches!(s.type_, EventType::StreamOnline));
+        match sub_online {
+            Some(_) => log::info!(
+                "stream online subscription already exists for user_login {}",
+                user.login
+            ),
+            None => {
+                let event = StreamOnlineV1::builder()
+                    .broadcaster_user_id(user.id.clone())
+                    .build();
+                self.subscribe(event).await.with_context(|| {
+                    format!(
+                        "failed to create stream.online subscription for (user_id, user_name) ({}, {})",
+                        user.id, user.login
+                    )
+                })?;
+                log::info!("Subscribed stream.online for channel {}", user.login);
+            }
+        };
+
+        let sub_offline = subs
+            .iter()
+            .find(|s| s.user_id == user.id && matches!(s.type_, EventType::StreamOffline));
+        match sub_offline {
+            Some(_) => log::info!(
+                "stream offline subscription already exists for user_login {}",
+                user.login
+            ),
+            None => {
+                let event = StreamOfflineV1::builder()
+                    .broadcaster_user_id(user.id.clone())
+                    .build();
+                self.subscribe(event).await.with_context(|| {
+                    format!(
+                        "failed to create stream.offline subscription for (user_id, user_name) ({}, {})",
+                        user.id, user.login
+                    )
+                })?;
+                log::info!("Subscribed stream.offline for channel {}", user.login);
+            }
+        };
+
+        Ok(())
+    }
+
+    /// Create a subscription. It will returns an error if the subscription
+    /// already exists, so make sure to check for its existence or delete it
+    /// before calling this function.
+    /// This function returns once the subscription has been confirmed through
+    /// the webhook, and requires the webhook server to be running in order to complete.
+    async fn subscribe<E: EventSubscription + std::fmt::Debug + Clone>(
+        &self,
+        event: E,
+    ) -> Result<()> {
+        let sub_body = helix::eventsub::CreateEventSubSubscriptionBody::builder()
+            .subscription(event.clone())
+            .transport(
+                eventsub::Transport::builder()
+                    .method(eventsub::TransportMethod::Webhook)
+                    .callback(self.config.callback_uri.0.clone())
+                    .secret(self.config.app_secret.clone())
+                    .build(),
+            )
+            .build();
+
+        self.client
+            .req_post(
+                helix::eventsub::CreateEventSubSubscriptionRequest::builder().build(),
+                sub_body,
+                self.token.get(),
+            )
+            // treat a conflict as a crash there
+            .await
+            .map_err(|e| crate::plugin::Error::Wrapped {
+                source: Box::new(e),
+                ctx: format!("Failed to subscribe with event {event:?}"),
+            })?;
+
+        Ok(())
     }
 }
 

@@ -113,7 +113,7 @@ async fn webhook_post<'r>(
     // dbg!(&payload);
     match payload {
         eventsub::Payload::VerificationRequest(verif_req) => {
-            log::info!("verification request received: {:#?}", verif_req);
+            log::debug!("verification request received: {:#?}", verif_req);
             Ok(verif_req.challenge)
         }
         eventsub::Payload::StreamOnlineV1(online) => {
