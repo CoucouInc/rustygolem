@@ -331,8 +331,15 @@ fn format_stream(stream: &Stream) -> String {
     } else {
         format!("({})", game)
     };
+    let time_fmt = time::macros::format_description!("[hour]:[minute] [period]");
+    let parsed = time::OffsetDateTime::parse(
+        stream.started_at.as_str(),
+        &time::format_description::well_known::Rfc3339,
+    )
+    .expect("valid RFC3339 timestamp for started_at");
+    let started_at = parsed.format(time_fmt).unwrap();
     format!(
-        "{} {} started at {}",
-        stream.user_name, game, stream.started_at
+        "{} {} started at {started_at} (https://www.twitch.tv/{})",
+        stream.user_name, game, stream.user_login
     )
 }
