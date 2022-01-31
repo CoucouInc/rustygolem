@@ -221,10 +221,24 @@ impl Twitch {
                         } else {
                             format!("({})", game)
                         };
+                        let irc_nick = self
+                            .config
+                            .watched_streams
+                            .iter()
+                            .find_map(|s| {
+                                if s.nickname == target.nickname {
+                                    Some(s.irc_nick.to_string())
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or_else(|| target.nickname.to_string());
+
                         let message = format!(
                             "Le stream de {} est maintenant live at {} {}!",
-                            target.nickname, url, game
+                            irc_nick, url, game
                         );
+
                         log::info!("Stream online: {}", &message);
                         self.state.add_stream(nick.clone(), stream);
                         for chan in &target.irc_channels {
