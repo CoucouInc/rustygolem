@@ -1,7 +1,6 @@
 #![allow(clippy::upper_case_acronyms)]
-use crate::plugin::{Plugin, Result};
+use crate::plugin::{self, Plugin, Result};
 use async_trait::async_trait;
-use chrono::{format::StrftimeItems, Utc};
 use irc::proto::{Command, Message};
 use nom::branch::alt;
 use nom::bytes::complete::{is_not, tag};
@@ -11,7 +10,7 @@ use nom::sequence::{delimited, pair, preceded, terminated};
 use nom::Finish;
 use nom::IResult;
 
-use crate::republican_calendar::RepublicanDate;
+use republican_calendar::RepublicanDate;
 
 pub struct Ctcp {}
 
@@ -45,10 +44,11 @@ async fn in_msg(msg: &Message) -> Result<Option<Message>> {
         let msg = match command {
             CtcpCmd::VERSION => "rustygolem".to_string(),
             CtcpCmd::TIME => {
-                let now = Utc::now();
-                let fmt = StrftimeItems::new("%H:%M:%S");
-                let rd = RepublicanDate::try_from(now.naive_utc().date())?;
-                format!("TIME {} UTC - {}", now.format_with_items(fmt), rd)
+                let now = time::OffsetDateTime::now_utc();
+                let fmt = time::macros::format_description!("[hour]:[minute]:[second]");
+                let rd = RepublicanDate::try_from(now.date())
+                    .map_err(|e| plugin::Error::Synthetic(e.to_string()))?;
+                format!("TIME {} UTC - {}", now.format(fmt).unwrap(), rd)
             }
             CtcpCmd::PING(opt_arg) => {
                 let arg = opt_arg

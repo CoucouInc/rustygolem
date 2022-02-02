@@ -6,10 +6,11 @@ use diesel::{backend::Backend, prelude::*, sql_types};
 use diesel::{deserialize::FromSql, sql_types::Text};
 use nom::branch::alt;
 use nom::bytes::complete::tag;
-use nom::character::complete::{multispace1, multispace0};
+use nom::character::complete::{multispace0, multispace1};
 use nom::combinator::{all_consuming, map};
 use nom::sequence::{preceded, terminated, tuple};
 use nom::{Finish, IResult};
+use republican_calendar::RepublicanDate;
 use reqwest::Client;
 use serde::Deserialize;
 use std::result::Result as StdResult;
@@ -19,9 +20,7 @@ use tokio::task;
 
 use crate::plugin::{Error, Plugin, Result};
 use crate::schema::crypto_rate::{self, dsl};
-// use crate::utils::messages::handle_errors;
 use crate::utils::parser::{self, command_prefix};
-// use crate::{db, utils::messages::with_target};
 use super::db;
 use irc::proto::{Command, Message};
 
@@ -40,7 +39,6 @@ impl Plugin for Crypto {
             let e: anyhow::Error = e.into();
             e
         })?;
-
 
         Ok(Crypto {})
     }
@@ -295,19 +293,6 @@ async fn get_and_save_all_rates() -> anyhow::Result<()> {
     Ok(())
 }
 
-// async fn handle_command(
-//     cmd: StdResult<CryptoCoin, &str>,
-//     mb_target: Option<&str>,
-// ) -> Option<String> {
-//     let message = match cmd {
-//         Err(x) => {
-//             format!("Dénomination inconnue: {}. Ici on ne deal qu'avec des monnais vaguement respectueuses comme btc (aka xbt), eth, doge, xrp et algo.", x)
-//         }
-//         Ok(c) => handle_errors(get_rate_and_history(c).await),
-//     };
-//     Some(with_target(&message, &mb_target))
-// }
-
 async fn get_rate_and_history(coin: CryptoCoin) -> anyhow::Result<String> {
     let client = reqwest::Client::new();
     let rate = coin.get_rate_in_euro(&client).await?;
@@ -376,9 +361,15 @@ async fn get_rate_and_history(coin: CryptoCoin) -> anyhow::Result<String> {
             format!("({})", variations.join(" − "))
         };
 
+        let now = time::OffsetDateTime::now_utc();
+        let rep_date = RepublicanDate::try_from(now.date()).map_err(|e| anyhow!(e))?;
+
         let result = format!(
-            "1 {} vaut {} euros grâce au pouvoir de la spéculation ! {}",
-            coin, rate, variations
+            "1 {} vaut {} euros grâce au pouvoir de la spéculation et {} ! {}",
+            coin,
+            rate,
+            rep_date.day_symbol(),
+            variations,
         );
 
         Ok(result)
@@ -445,6 +436,5 @@ mod test {
             Ok((Err("wut"), None)),
             "inner error on unknown coin"
         );
-
     }
 }

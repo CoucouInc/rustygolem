@@ -1,0 +1,6 @@
+[workspace]
+
+members = [
+  "rustygolem",
+  "republican-calendar",
+]

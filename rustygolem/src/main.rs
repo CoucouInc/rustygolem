@@ -18,7 +18,6 @@ use structopt::StructOpt;
 mod golem;
 mod plugin;
 mod plugins;
-mod republican_calendar;
 mod schema;
 mod utils;
 

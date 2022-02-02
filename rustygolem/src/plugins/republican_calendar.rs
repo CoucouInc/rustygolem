@@ -29,11 +29,24 @@ async fn in_msg(msg: &Message) -> Result<Option<Message>> {
 
     if let Command::PRIVMSG(_source, privmsg) = &msg.command {
         if let Some(mb_target) = parser::single_command("date", privmsg) {
-            let msg = crate::republican_calendar::handle_command(mb_target)
-                .context("republican calendar")?;
+            let msg = handle_command(mb_target).context("republican calendar")?;
 
-            return Ok(Some(Command::PRIVMSG(response_target.to_string(), msg).into()));
+            return Ok(Some(
+                Command::PRIVMSG(response_target.to_string(), msg).into(),
+            ));
         }
     }
     Ok(None)
+}
+
+pub(crate) fn handle_command(mb_target: Option<&str>) -> Option<String> {
+    let now = time::OffsetDateTime::now_utc().date();
+    let msg = match republican_calendar::RepublicanDate::try_from(now) {
+        Ok(rd) => crate::utils::messages::with_target(
+            &format!("Nous sommes aujourd'hui le {}", rd),
+            &mb_target,
+        ),
+        Err(err) => err.to_string(),
+    };
+    Some(msg)
 }

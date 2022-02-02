@@ -9,5 +9,5 @@ pub use crypto::Crypto;
 pub use ctcp::Ctcp;
 pub use echo::Echo;
 pub use joke::Joke;
-pub use republican_calendar::RepublicanCalendar;
+pub use self::republican_calendar::RepublicanCalendar;
 pub use twitch::Twitch;
