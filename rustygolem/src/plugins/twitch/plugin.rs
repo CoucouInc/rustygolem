@@ -24,7 +24,7 @@ use twitch_api2::{
     HelixClient,
 };
 
-use crate::plugin::{Plugin, Result};
+use plugin_core::{Plugin, Result};
 use crate::plugins::twitch::{
     config::{Config, Message},
     webhook_server,
@@ -428,7 +428,7 @@ impl Twitch {
             .client
             .req_get(req, self.token.get())
             .await
-            .map_err(|e| crate::plugin::Error::Wrapped {
+            .map_err(|e| plugin_core::Error::Wrapped {
                 source: Box::new(e),
                 ctx: "cannot list subscriptions".to_string(),
             })?;
@@ -445,7 +445,7 @@ impl Twitch {
                 self.token.get(),
             )
             .await
-            .map_err(|e| crate::plugin::Error::Wrapped {
+            .map_err(|e| plugin_core::Error::Wrapped {
                 source: Box::new(e),
                 ctx: "cannot list subscriptions".to_string(),
             })?;
@@ -486,7 +486,7 @@ impl Twitch {
                 self.token.get(),
             )
             .await
-            .map_err(|e| crate::plugin::Error::Wrapped {
+            .map_err(|e| plugin_core::Error::Wrapped {
                 source: Box::new(e),
                 ctx: format!("Failed to delete subscription {:?}", sub),
             })?;
@@ -571,7 +571,7 @@ impl Twitch {
             )
             // treat a conflict as a crash there
             .await
-            .map_err(|e| crate::plugin::Error::Wrapped {
+            .map_err(|e| plugin_core::Error::Wrapped {
                 source: Box::new(e),
                 ctx: format!("Failed to subscribe with event {event:?}"),
             })?;

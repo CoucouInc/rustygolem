@@ -1,0 +1,9 @@
+[package]
+name = "plugin-url"
+version = "0.1.0"
+edition = "2021"
+description = "Remember recent urls and fetch metadata for them"
+
+[dependencies]
+async-trait = "0.1.52"
+plugin-core = { path = "../plugin-core" }

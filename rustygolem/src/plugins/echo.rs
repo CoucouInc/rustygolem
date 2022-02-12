@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use crate::plugin::{Plugin, Result};
 use async_trait::async_trait;
 use irc::proto::{Command, Message};
+use plugin_core::{Plugin, Result};
 use tokio::sync::mpsc;
 
 pub struct Echo {}

@@ -6,7 +6,6 @@ use std::num::ParseIntError;
 use tokio::sync::mpsc;
 use twitch_api2::eventsub;
 
-use crate::plugin::{self, Error};
 use crate::plugins::twitch::config::{Config, Message};
 
 type HmacSha256 = Hmac<sha2::Sha256>;
@@ -150,7 +149,7 @@ pub struct ServerState {
     send_chan: mpsc::Sender<Message>,
 }
 
-pub async fn run(config: &Config, tx: mpsc::Sender<Message>) -> plugin::Result<()> {
+pub async fn run(config: &Config, tx: mpsc::Sender<Message>) -> plugin_core::Result<()> {
     let bind = &config.webhook_bind;
     let rocket_config = rocket::Config {
         address: bind
@@ -182,5 +181,7 @@ pub async fn run(config: &Config, tx: mpsc::Sender<Message>) -> plugin::Result<(
         .launch()
         .await;
     log::error!("The webhook server shutdown {:?}", result);
-    Err(Error::Synthetic("twitch webhook server shut down".to_string()))
+    Err(plugin_core::Error::Synthetic(
+        "twitch webhook server shut down".to_string(),
+    ))
 }

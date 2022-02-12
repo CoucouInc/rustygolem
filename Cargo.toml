@@ -1,6 +1,8 @@
 [workspace]
 
 members = [
-  "rustygolem",
+  "plugin-core",
+  "plugin-url",
   "republican-calendar",
+  "rustygolem",
 ]

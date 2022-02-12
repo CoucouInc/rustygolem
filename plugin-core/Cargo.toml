@@ -1,0 +1,12 @@
+[package]
+name = "plugin-core"
+version = "0.1.0"
+edition = "2021"
+description = "Interface and core utils for golem plugins"
+
+[dependencies]
+anyhow = "1.0.53"
+async-trait = "0.1.52"
+irc = { version = "0.15.0", features = ["tls-native"]}
+thiserror = "1.0.30"
+tokio = { version = "1.12.0", features = ["sync"] }

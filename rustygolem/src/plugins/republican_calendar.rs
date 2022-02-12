@@ -1,4 +1,4 @@
-use crate::plugin::{Plugin, Result};
+use plugin_core::{Plugin, Result};
 use crate::utils::parser;
 use anyhow::Context;
 use async_trait::async_trait;

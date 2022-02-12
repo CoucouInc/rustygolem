@@ -1527,6 +1527,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "58893f751c9b0412871a09abd62ecd2a00298c6c83befa223ef98c52aef40cbe"
 
 [[package]]
+name = "plugin-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "irc",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "plugin-url"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "plugin-core",
+]
+
+[[package]]
 name = "ppv-lite86"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1882,6 +1901,7 @@ dependencies = [
  "itertools 0.10.3",
  "log",
  "nom 6.2.1",
+ "plugin-core",
  "pretty_assertions",
  "republican-calendar",
  "reqwest",

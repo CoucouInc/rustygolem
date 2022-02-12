@@ -33,7 +33,8 @@ thiserror = "1.0.30"
 serde_dhall = "0.10.1"
 http = "0.2.5"
 time = { version = "0.3.7", features = ["parsing", "macros", "formatting"]}
-republican-calendar = { path = "../republican-calendar"}
+republican-calendar = { path = "../republican-calendar" }
+plugin-core = { path = "../plugin-core" }
 
 [dev-dependencies]
 pretty_assertions = "0.6.1"

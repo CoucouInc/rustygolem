@@ -18,7 +18,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task;
 
-use crate::plugin::{Error, Plugin, Result};
+use plugin_core::{Plugin, Result, Error};
 use crate::schema::crypto_rate::{self, dsl};
 use crate::utils::parser::{self, command_prefix};
 use super::db;

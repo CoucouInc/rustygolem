@@ -1,4 +1,4 @@
-use crate::plugin::{Plugin, Result};
+use plugin_core::{Plugin, Result};
 use crate::utils::parser;
 use async_trait::async_trait;
 use irc::proto::{Command, Message};

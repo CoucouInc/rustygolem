@@ -1,5 +1,5 @@
 #![allow(clippy::upper_case_acronyms)]
-use crate::plugin::{self, Plugin, Result};
+use plugin_core::{self, Plugin, Result};
 use async_trait::async_trait;
 use irc::proto::{Command, Message};
 use nom::branch::alt;
@@ -47,7 +47,7 @@ async fn in_msg(msg: &Message) -> Result<Option<Message>> {
                 let now = time::OffsetDateTime::now_utc();
                 let fmt = time::macros::format_description!("[hour]:[minute]:[second]");
                 let rd = RepublicanDate::try_from(now.date())
-                    .map_err(|e| plugin::Error::Synthetic(e.to_string()))?;
+                    .map_err(|e| plugin_core::Error::Synthetic(e.to_string()))?;
                 format!("TIME {} UTC - {}", now.format(fmt).unwrap(), rd)
             }
             CtcpCmd::PING(opt_arg) => {

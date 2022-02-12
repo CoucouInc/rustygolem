@@ -42,7 +42,7 @@ pub trait Plugin: Sync + Send {
         Ok(())
     }
 
-    /// a way to identify the plugin
+    /// The unique identifier of the plugin
     fn get_name(&self) -> &'static str;
 
     /// Method invoked whenever a message is received from IRC
@@ -52,7 +52,6 @@ pub trait Plugin: Sync + Send {
     }
 
     /// Method invoked whenever the bot sends a message to IRC.
-    /// No message can be sent as a response.
     async fn out_message(&self, msg: &Message) -> Result<()> {
         Ok(())
     }

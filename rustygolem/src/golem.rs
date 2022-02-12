@@ -1,4 +1,4 @@
-use crate::plugin::{self, Plugin};
+use plugin_core::{self as plugin, Plugin};
 use crate::plugins;
 use anyhow::{Context, Result};
 use futures::prelude::*;

@@ -16,7 +16,6 @@ use log::info;
 use structopt::StructOpt;
 
 mod golem;
-mod plugin;
 mod plugins;
 mod schema;
 mod utils;
