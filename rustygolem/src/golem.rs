@@ -190,6 +190,7 @@ async fn init_plugin(name: &str) -> Result<Box<dyn Plugin>> {
         "joke" => plugin::new_boxed::<plugins::Joke>().await,
         "republican_calendar" => plugin::new_boxed::<plugins::RepublicanCalendar>().await,
         "twitch" => plugin::new_boxed::<plugins::Twitch>().await,
+        "url" => plugin::new_boxed::<plugin_url::UrlPlugin>().await,
         _ => return Err(anyhow!("Unknown plugin name: {}", name)),
     };
     let plugin = plugin.with_context(|| format!("Cannot initalize plugin {}", name))?;
