@@ -37,6 +37,9 @@ struct Opt {
 
     #[structopt(long)]
     disable_tls: bool,
+
+    #[structopt(long, default_value="golem_config.dhall")]
+    config: String
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -63,7 +66,7 @@ async fn main() -> Result<()> {
         ..Config::default()
     };
 
-    golem::Golem::new_from_config(config)
+    golem::Golem::new_from_config(config, opt.config)
         .await?
         .run()
         .await

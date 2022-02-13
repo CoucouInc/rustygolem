@@ -1,8 +1,8 @@
-use plugin_core::{self as plugin, Plugin};
 use crate::plugins;
 use anyhow::{Context, Result};
 use futures::prelude::*;
 use irc::proto::Message;
+use plugin_core::{self as plugin, Plugin};
 use serde::Deserialize;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -33,9 +33,13 @@ pub struct Golem {
 
 impl Golem {
     #[allow(dead_code)]
-    pub async fn new_from_config(irc_config: irc::client::data::Config) -> Result<Self> {
+    pub async fn new_from_config(
+        irc_config: irc::client::data::Config,
+        golem_config_path: String,
+    ) -> Result<Self> {
         let irc_client = irc::client::Client::from_config(irc_config).await?;
-        let conf = GolemConfig::from_path("golem_config.dhall")?;
+        let conf = GolemConfig::from_path(golem_config_path.clone())
+            .with_context(|| format!("Cannot parse golem config at {golem_config_path}"))?;
         let plugins = stream::iter(conf.plugins)
             .map(|name| async move { init_plugin(&name).await })
             .buffer_unordered(10)
@@ -99,7 +103,8 @@ impl Golem {
                 }
             }
 
-            let messages = self.plugins_in_messages(&irc_message)
+            let messages = self
+                .plugins_in_messages(&irc_message)
                 .await
                 .with_context(|| "Plugin error !")?;
 
@@ -110,10 +115,7 @@ impl Golem {
         Err(anyhow!("IRC receiving stream exited"))
     }
 
-    async fn plugins_in_messages(
-        &self,
-        msg: &Message,
-    ) -> Result<Vec<Option<Message>>> {
+    async fn plugins_in_messages(&self, msg: &Message) -> Result<Vec<Option<Message>>> {
         let mut results = Vec::with_capacity(self.plugins.len());
 
         let (txs, rxs): (Vec<_>, Vec<_>) = self.plugins.iter().map(|_| oneshot::channel()).unzip();
