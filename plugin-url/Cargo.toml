@@ -5,6 +5,7 @@ edition = "2021"
 description = "Remember recent urls and fetch metadata for them"
 
 [dependencies]
+anyhow = "*"
 async-trait = "0.1.52"
 google-youtube3 = "2.0.10"
 irc = { version = "0.15.0", features = ["tls-native"]}
@@ -13,6 +14,14 @@ nom = "7.1.0"
 parking_lot = "0.12.0"
 plugin-core = { path = "../plugin-core" }
 pretty_assertions = "1.1.0"
-url = "2.2.2"
-reqwest = "0.11"
+reqwest = { version = "^0.11", features = ["json"] }
 scraper = "0.12.0"
+serde = { version = "*", features = ["derive"] }
+serde_dhall = "*"
+tokio = { version = "1.12.0", features = ["full"] }
+url = "2.2.2"
+
+
+[[bin]]
+name = "testyt"
+path = "src/bin/testyt.rs"

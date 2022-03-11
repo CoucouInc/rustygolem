@@ -1,0 +1,17 @@
+[package]
+name = "plugin-twitch"
+version = "0.1.0"
+edition = "2021"
+description = "Twitch integration"
+
+[dependencies]
+anyhow = "1.0.54"
+plugin-core = { path = "../plugin-core" }
+tokio = { version = "1.12.0", features = ["full"] }
+twitch_api2 = { version = "0.6.0-rc.3", features = ["twitch_oauth2", "helix", "reqwest_client", "eventsub"] }
+reqwest = "^0.11"
+
+
+[[bin]]
+name = "testtwitch"
+path = "src/bin/testtwitch.rs"

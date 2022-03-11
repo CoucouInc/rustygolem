@@ -47,5 +47,5 @@ path = "src/main.rs"
 
 
 [[bin]]
-name = "testtwitch"
-path = "src/testtwitch.rs"
+name = "testgolem"
+path = "src/bin/testgolem.rs"

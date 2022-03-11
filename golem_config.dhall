@@ -56,5 +56,6 @@ in
 , blacklisted_users = ["coucoubot", "lambdacoucou", "M`arch`ov", "coucoucou"]
 , sasl_password = Some (env:SASL_PASSWORD as Text) ? None Text
 -- ctcp plugin is *required* to handle pings
-, plugins = ["crypto", "twitch", "joke", "ctcp", "republican_calendar"]
+, plugins = ["crypto", "twitch", "joke", "ctcp", "republican_calendar", "url"]
+, youtube_api_key = Some (env:YT_API_KEY as Text) ? None Text
 }

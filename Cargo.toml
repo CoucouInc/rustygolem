@@ -3,6 +3,7 @@
 members = [
   "plugin-core",
   "plugin-url",
+  "plugin-twitch",
   "republican-calendar",
   "rustygolem",
 ]

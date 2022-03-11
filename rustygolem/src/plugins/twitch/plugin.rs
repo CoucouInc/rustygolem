@@ -200,6 +200,7 @@ impl Twitch {
             .watched_streams
             .iter()
             .find(|s| s.nickname == online.broadcaster_user_login);
+        log::info!("Stream online payload {online:?}");
         match target {
             None => log::warn!(
                 "Got a notification for {} but not found in config",

@@ -115,7 +115,10 @@ impl Golem {
         Err(anyhow!("IRC receiving stream exited"))
     }
 
-    async fn plugins_in_messages(&self, msg: &Message) -> Result<Vec<Option<Message>>> {
+    async fn plugins_in_messages(
+        &self,
+        msg: &Message,
+    ) -> Result<Vec<Option<(&'static str, Message)>>> {
         let mut results = Vec::with_capacity(self.plugins.len());
 
         let (txs, rxs): (Vec<_>, Vec<_>) = self.plugins.iter().map(|_| oneshot::channel()).unzip();
@@ -126,7 +129,8 @@ impl Golem {
                 let mb_msg = plugin.in_message(msg).await.with_context(|| {
                     format!("in_message error from plugin {}", plugin.get_name())
                 })?;
-                if tx.send(mb_msg).is_err() {
+                let msg = mb_msg.map(|m| (plugin.get_name(), m));
+                if tx.send(msg).is_err() {
                     return Err(anyhow!("cannot send plugin message !"));
                 }
                 Ok::<(), anyhow::Error>(())
@@ -134,7 +138,7 @@ impl Golem {
             .await?;
 
         for rx in rxs {
-            let rx: oneshot::Receiver<Option<Message>> = rx;
+            let rx: oneshot::Receiver<Option<(&'static str, Message)>> = rx;
             results.push(rx.await?);
         }
 
@@ -145,10 +149,20 @@ impl Golem {
         let (tx, mut rx) = mpsc::channel(10);
         let runs = self.plugins.iter().map(|p| {
             let tx = tx.clone();
+            // The logic here is a bit meh.
+            // need to create an intermediate channel to add the plugin name
+            // to the message
             async move {
-                p.run(tx)
+                let name = p.get_name();
+                let (plug_tx, mut plug_rx) = mpsc::channel(1);
+                p.run(plug_tx)
                     .await
                     .with_context(|| format!("Plugin {}.run() failed", p.get_name()))?;
+                while let Some(plugin_message) = plug_rx.recv().await {
+                    tx.send((name, plugin_message))
+                        .await
+                        .with_context(|| format!("Plugin {}.run() failed", p.get_name()))?;
+                }
                 Ok::<(), anyhow::Error>(())
             }
         });
@@ -162,20 +176,26 @@ impl Golem {
         Ok(())
     }
 
-    async fn outbound_message(&self, message: &Message) -> Result<()> {
+    // TODO, pair the message with the plugin ID, so we can avoid calling
+    // out_message for the plugin responsible for sending the message
+    // and thus, avoiding infinite loop (at least the simple ones)
+    async fn outbound_message(&self, message: &(&'static str, Message)) -> Result<()> {
         // TODO don't crash if a plugin returns an error
         futures::stream::iter(self.plugins.iter())
             .map(Ok)
             .try_for_each_concurrent(5, |plugin| {
-                let msg = &message;
+                let (orig_name, msg) = &message;
                 async move {
-                    plugin.out_message(msg).await?;
+                    if &plugin.get_name() != orig_name {
+                        plugin.out_message(msg).await?;
+                    }
                     Ok::<(), anyhow::Error>(())
                 }
             })
             .await?;
         let client = self.irc_client.lock().expect("lock golem irc client");
-        client.send(message.clone())?;
+        // TODO this is blocking
+        client.send(message.1.clone())?;
         Ok(())
     }
 }

@@ -81,9 +81,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.53"
+version = "1.0.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94a45b455c14666b85fc40a019e8ab9eb75e3a124e05494f5397122bc9eb06e0"
+checksum = "159bb86af3a200e19a068f4224eae4c8bb2d0fa054c7e5d1cacd5cef95e684cd"
 
 [[package]]
 name = "arrayvec"
@@ -1847,9 +1847,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "plugin-twitch"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "plugin-core",
+ "reqwest",
+ "tokio",
+ "twitch_api2",
+]
+
+[[package]]
 name = "plugin-url"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "google-youtube3",
  "irc",
@@ -1860,6 +1872,9 @@ dependencies = [
  "pretty_assertions 1.1.0",
  "reqwest",
  "scraper",
+ "serde",
+ "serde_dhall",
+ "tokio",
  "url 2.2.2",
 ]
 
