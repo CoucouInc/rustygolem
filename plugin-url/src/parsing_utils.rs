@@ -1,8 +1,8 @@
 use nom::{
-    character::complete::{alphanumeric1, multispace0, multispace1},
-    combinator::{map, opt, recognize},
+    bytes::complete::take_till,
+    character::complete::{multispace0, multispace1},
+    combinator::{map, opt},
     error::ParseError,
-    multi::many1,
     sequence::{delimited, pair, tuple},
     IResult,
 };
@@ -18,7 +18,7 @@ where
 
 pub fn target<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E> {
     let target_sep = delimited(
-        multispace0,
+        multispace1,
         nom::character::complete::char('>'),
         multispace1,
     );
@@ -26,7 +26,7 @@ pub fn target<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'
 }
 
 pub fn word<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E> {
-    recognize(many1(alphanumeric1))(input)
+    take_till(|c| c == ' ' || c == '\t' || c == '\n' || c == '\r')(input)
 }
 
 /// Utility to parse common command prefix
@@ -35,4 +35,17 @@ pub(crate) fn command_prefix(input: &str) -> nom::IResult<&str, &str> {
         nom::bytes::complete::is_a("&"),
         nom::bytes::complete::is_a("λ"),
     ))(input)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use nom::Finish;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn test_word() {
+        let r: Result<_, nom::error::VerboseError<_>> = word("coucou").finish();
+        assert_eq!(r, Ok(("", "coucou")));
+    }
 }

@@ -44,27 +44,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
     //   "https://m.youtube.com"
     // ]
 
-    let url = Url::parse("https://www.googleapis.com/youtube/v3/videos")?;
+    let url = Url::parse("https://www.googleapis.com/youtube/v3/search")?;
 
-    // let q = std::env::var("SEARCH").unwrap_or_else(|_| "UCmwOm-YjCmcddE9xe9sEpUg".to_string());
+    let q = std::env::var("SEARCH").unwrap_or_else(|_| "UCmwOm-YjCmcddE9xe9sEpUg".to_string());
     let resp = reqwest::Client::new()
         .get(url)
         // https://www.youtube.com/user/VieDeChouhartem
-        .query(&[("id", "Hio2lzkEUmo")])
+        // .query(&[("id", "Hio2lzkEUmo")])
         .query(&[("key", api_key)])
         .query(&[("part", "snippet")])
-        // .query(&[("type", "channel")])
-        // .query(&[("q", q)])
+        .query(&[("type", "channel")])
+        .query(&[("type", "video")])
+        .query(&[("type", "playlist")])
+        .query(&[("q", q)])
         .send()
         .await?
         .error_for_status()?;
 
     dbg!(&resp);
-    let jsonbody: VideoListResponse = resp.json().await?;
-    // let jsonbody: yt3::api::SearchListResponse = resp.json().await?;
+    // let jsonbody: VideoListResponse = resp.json().await?;
+    let jsonbody: yt3::api::SearchListResponse = resp.json().await?;
     // let jsonbody: PlaylistListResponse = resp.json().await?;
 
-    println!("{:#?}", jsonbody);
+    // for video:
+    // title, channel_title
+
+    let searchresult = &jsonbody.items.unwrap()[0];
+    println!("{:#?}", searchresult);
 
     // println!("{:?}", resp.unwrap().text().await);
     //

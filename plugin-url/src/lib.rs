@@ -1,4 +1,7 @@
+use encoding_rs::{CoderResult, Encoding};
 use google_youtube3::api::{PlaylistListResponse, SearchListResponse, VideoListResponse};
+use mime::Mime;
+use reqwest::header::HeaderValue;
 use serde::{de::DeserializeOwned, Deserialize};
 use std::{
     borrow::Cow,
@@ -73,16 +76,24 @@ impl UrlPlugin {
             self.add_urls(source, parse_urls(privmsg)?);
 
             if let Some(cmd) = parse_command(privmsg) {
-                let (mb_idx, mb_target) = cmd;
-                let channel = match msg.response_target() {
-                    None => return Ok(None),
-                    Some(target) => target,
-                };
-                let message = self.get_url(channel, mb_idx.unwrap_or(0)).await?;
+                match cmd {
+                    Cmd::Url(mb_idx, mb_target) => {
+                        let channel = match msg.response_target() {
+                            None => return Ok(None),
+                            Some(target) => target,
+                        };
+                        let message = self.get_url(channel, mb_idx.unwrap_or(0)).await?;
 
-                let target = mb_target.map(|t| format!("{t}: ")).unwrap_or_default();
-                let msg = format!("{target}{message}");
-                return Ok(Some(Command::PRIVMSG(channel.to_string(), msg).into()));
+                        let target = mb_target.map(|t| format!("{t}: ")).unwrap_or_default();
+                        let msg = format!("{target}{message}");
+                        log::debug!("message to send: {msg:?}");
+                        return Ok(Some(Command::PRIVMSG(channel.to_string(), msg).into()));
+                    }
+                    Cmd::Search(_term, _mb_target) => {
+                        // TODO: implement that
+                        return Ok(None)
+                    }
+                }
             }
         }
         Ok(None)
@@ -93,7 +104,7 @@ impl UrlPlugin {
             let urls_guard = self.seen_urls.lock();
             urls_guard
                 .get(channel)
-                .and_then(|urls| urls.get(urls.len() - 1 - idx))
+                .and_then(|urls| urls.len().checked_sub(1 + idx).and_then(|i| urls.get(i)))
                 // clone the url so that we can release the lock.
                 // This avoid holding it across await points when fetching data for the url
                 .cloned()
@@ -110,15 +121,12 @@ impl UrlPlugin {
     }
 
     async fn get_regular_url(&self, url: &Url) -> Result<String> {
-        let resp = self
-            .client
-            .get(url.clone())
-            .send()
-            .await
-            .map_err(|err| Error::Wrapped {
-                source: Box::new(err),
-                ctx: format!("Cannot GET {url}"),
-            })?;
+        let resp = self.client.get(url.clone()).send().await;
+
+        let resp = match resp {
+            Ok(r) => r,
+            Err(err) => return Ok(format!("Problème avec l'url {}: {}", url, err)),
+        };
 
         let status_code = resp.status();
         if status_code != reqwest::StatusCode::OK {
@@ -139,18 +147,66 @@ impl UrlPlugin {
             _ => return Ok(format!("No valid content type found for {url}")),
         };
 
-        let body = resp.text().await.map_err(|err| Error::Wrapped {
-            source: Box::new(err),
-            ctx: format!("Cannot extract body at {url}"),
-        })?;
+        Ok(self.sniff_title(resp).await?)
+    }
+
+    // To avoid someone pointing the bot at a gigantic file, filling up memory or disk
+    async fn sniff_title(&self, mut resp: reqwest::Response) -> Result<String> {
+        let ct = resp.headers().get(reqwest::header::CONTENT_TYPE).cloned();
+        let url = resp.url().to_string();
+
+        // only bother to look further if the content type looks like html or text
+        match ct.as_ref().and_then(|h| h.to_str().ok()) {
+            Some(ct) if ct.contains("text") || ct.contains("html") => (),
+            Some(ct) => {
+                return Ok(format!(
+                    "Cannot extract title from content type {ct} for {url}",
+                ))
+            }
+            _ => return Ok(format!("No valid content type found for {url}")),
+        };
+
+        // limit to 5kib download
+        let capa = 5 * 1024;
+        let mut read_buf = bytes::BytesMut::with_capacity(capa);
+
+        while let Some(chunk) = resp.chunk().await.transpose() {
+            let chunk = chunk.map_err(|err| Error::Wrapped {
+                source: Box::new(err),
+                ctx: format!("Failed to read bytes from response for url {}", url),
+            })?;
+
+            // make sure we don't read more than the allocated capacity
+            let l = (capa - read_buf.len()).min(chunk.len());
+            read_buf.extend_from_slice(&chunk[0..l]);
+            if read_buf.len() >= capa {
+                break;
+            }
+        }
+
+        let fragment = text_with_charset(&read_buf, &ct)?;
 
         let selector = scraper::Selector::parse("title").unwrap();
-        if let Some(title) = scraper::Html::parse_document(&body)
+        // there can be a problem since `<title>coucou` is parsed as the
+        // full title. So need to grab enough bytes from the network
+        // to be reasonably sure that we got the full title
+        // Also, ignore any parse error. The parser is very lenient and can
+        // gives us a title even if there are other error in the document
+        if let Some(title) = scraper::Html::parse_document(&fragment)
             .select(&selector)
             .next()
         {
-            let title = title.text().into_iter().collect::<String>();
-            Ok(format!("{title} [{url}]"))
+            log::debug!("found title: {title:?}");
+            let title = title
+                .text()
+                .into_iter()
+                .collect::<String>()
+                .replace("\n", " ");
+            if title.len() > 100 {
+                Ok(format!("{}[…] [{url}]", &title[..100]))
+            } else {
+                Ok(format!("{title} [{url}]"))
+            }
         } else {
             Ok(format!("No title found at {url}"))
         }
@@ -297,21 +353,45 @@ fn parse_urls(msg: &str) -> Result<Vec<Url>> {
 fn parse_url(raw: &str) -> IResult<&str, Option<Url>> {
     map(
         take_while(|c: char| !(c == ' ' || c == '\t' || c == '\r' || c == '\n')),
-        |word| Url::parse(word).ok(),
+        |word| match Url::parse(word) {
+            Ok(u) if !u.cannot_be_a_base() && (u.scheme() == "http" || u.scheme() == "https") => {
+                Some(u)
+            }
+            _ => None,
+        },
     )(raw)
 }
 
+#[derive(PartialEq, Eq, Debug)]
+enum Cmd<'msg> {
+    /// optional url index, optional target nick
+    Url(Option<usize>, Option<&'msg str>),
+    /// search term, optional target nick
+    #[allow(dead_code)]
+    Search(&'msg str, Option<&'msg str>),
+}
+
 /// returns Option<(optional_url_index, optional_target_nick)>
-fn parse_command(msg: &str) -> Option<(Option<usize>, Option<&str>)> {
+fn parse_command(msg: &str) -> Option<Cmd<'_>> {
     let cmd = preceded(
         parsing_utils::command_prefix,
-        map(
-            parsing_utils::with_target(pair(tag("url"), opt(preceded(multispace1, digit1)))),
-            |((_, mb_idx), mb_target)| {
-                let idx = mb_idx.and_then(|raw| str::parse(raw).ok());
-                (idx, mb_target)
-            },
-        ),
+        // alt((
+            map(
+                parsing_utils::with_target(pair(tag("url"), opt(preceded(multispace1, digit1)))),
+                |((_, mb_idx), mb_target)| {
+                    let idx = mb_idx.and_then(|raw| str::parse(raw).ok());
+                    Cmd::Url(idx, mb_target)
+                },
+            )
+            // ,
+            // map(
+            //     parsing_utils::with_target(pair(
+            //         tag("yt_search"),
+            //         preceded(multispace1, parsing_utils::word),
+            //     )),
+            //     |_| todo!(),
+            // ),
+        // )),
     );
     all_consuming(terminated(cmd, multispace0))(msg)
         .finish()
@@ -368,6 +448,39 @@ fn extract_yt_id(url: &Url) -> Option<YtId<'_>> {
         }),
         _ => None,
     }
+}
+
+/// This is copy pasted and adapted from the method with the same name in reqwest:
+/// https://docs.rs/reqwest/latest/src/reqwest/async_impl/response.rs.html#184-207
+/// The difference is about reading only the beginning of the response up to a point
+/// to avoid a denial of service where the bot is pointed at a 100GB response.
+/// Defaults to utf-8
+fn text_with_charset(bytes: &[u8], content_type: &Option<HeaderValue>) -> Result<String> {
+    let ct = content_type
+        .as_ref()
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<Mime>().ok());
+
+    let mut decoder = ct
+        .as_ref()
+        .and_then(|mime| mime.get_param("charset").map(|charset| charset.as_str()))
+        .and_then(|encoding_name| Encoding::for_label(encoding_name.as_bytes()))
+        .unwrap_or(encoding_rs::UTF_8)
+        .new_decoder();
+
+    // let mut decoder = Encoding::for_label(b"utf-8").unwrap().new_decoder();
+    // let (res, byte_read, did_replace) =
+    //     decoder.decode_to_string(&buffer, &mut dst, reached_end_of_stream);
+
+    let mut dst = String::with_capacity(5 * 1024);
+    let (res, _byte_read, _did_replace) = decoder.decode_to_string(bytes, &mut dst, false);
+
+    // because res is #[must_use]
+    match res {
+        CoderResult::InputEmpty => (),
+        CoderResult::OutputFull => (),
+    }
+    Ok(dst)
 }
 
 #[cfg(test)]
@@ -438,19 +551,19 @@ mod test {
 
     #[test]
     fn test_simple_command() {
-        assert_eq!(parse_command("λurl"), Some((None, None)));
+        assert_eq!(parse_command("λurl"), Some(Cmd::Url(None, None)));
     }
 
     #[test]
     fn test_command_with_idx() {
-        assert_eq!(parse_command("λurl 2"), Some((Some(2), None)));
+        assert_eq!(parse_command("λurl 2"), Some(Cmd::Url(Some(2), None)));
     }
 
     #[test]
     fn test_command_with_target() {
         assert_eq!(
             parse_command("λurl > charlie"),
-            Some((None, Some("charlie")))
+            Some(Cmd::Url(None, Some("charlie")))
         );
     }
 
@@ -458,7 +571,7 @@ mod test {
     fn test_command_with_idx_and_target() {
         assert_eq!(
             parse_command("λurl 3 > charlie"),
-            Some((Some(3), Some("charlie")))
+            Some(Cmd::Url(Some(3), Some("charlie")))
         );
     }
 
@@ -563,5 +676,12 @@ mod test {
         );
     }
 
-    // https://youtu.be/6gwBOTggfRc
+    #[test]
+    fn test_decode_text() {
+        let sparkle_heart = vec![240, 159, 146, 150];
+        assert_eq!(
+            text_with_charset(&sparkle_heart, &None).unwrap(),
+            "💖".to_string()
+        );
+    }
 }
