@@ -8,7 +8,7 @@ pub struct RepublicanCalendar {}
 
 #[async_trait]
 impl Plugin for RepublicanCalendar {
-    async fn init() -> Result<Self> {
+    async fn init(_config_path: &str) -> Result<Self> {
         Ok(RepublicanCalendar {})
     }
 

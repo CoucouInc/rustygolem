@@ -1,4 +1,6 @@
 #![allow(unused_variables)]
+use std::path::Path;
+
 use async_trait::async_trait;
 use irc::proto::Message;
 use tokio::sync::mpsc;
@@ -30,7 +32,7 @@ pub trait WrapError<T> {
 
 #[async_trait]
 pub trait Plugin: Sync + Send {
-    async fn init() -> Result<Self>
+    async fn init(config_path: &str) -> Result<Self>
     where
         Self: Sized;
 
@@ -57,9 +59,9 @@ pub trait Plugin: Sync + Send {
     }
 }
 
-pub async fn new_boxed<T>() -> Result<Box<dyn Plugin>>
+pub async fn new_boxed<T>(config_path: &str) -> Result<Box<dyn Plugin>>
 where
     T: Plugin + 'static,
 {
-    Ok(Box::new(T::init().await?))
+    Ok(Box::new(T::init(config_path).await?))
 }

@@ -9,7 +9,7 @@ pub struct Echo {}
 
 #[async_trait]
 impl Plugin for Echo {
-    async fn init() -> Result<Self> {
+    async fn init(_config_path: &str) -> Result<Self> {
         Ok(Echo {})
     }
 

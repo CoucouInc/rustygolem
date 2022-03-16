@@ -37,14 +37,15 @@ pub struct UrlPlugin {
 }
 
 impl UrlPlugin {
-    fn new() -> Result<Self> {
-        let path = "golem_config.dhall";
+    fn new(config_path: &str) -> Result<Self>
+    {
+        // let path = "golem_config.dhall";
         let yt_config: YtConfig =
-            serde_dhall::from_file(path)
+            serde_dhall::from_file(config_path)
                 .parse()
                 .map_err(|err| Error::Wrapped {
                     source: Box::new(err),
-                    ctx: format!("Failed to read config at {path}"),
+                    ctx: format!("Failed to read config at {config_path}"),
                 })?;
         if yt_config.youtube_api_key.is_some() {
             log::info!("Url plugin initialized with youtube api credentials.");
@@ -91,7 +92,7 @@ impl UrlPlugin {
                     }
                     Cmd::Search(_term, _mb_target) => {
                         // TODO: implement that
-                        return Ok(None)
+                        return Ok(None);
                     }
                 }
             }
@@ -328,8 +329,8 @@ impl UrlPlugin {
 
 #[async_trait]
 impl Plugin for UrlPlugin {
-    async fn init() -> Result<Self> {
-        UrlPlugin::new()
+    async fn init(config_path: &str) -> Result<Self> {
+        UrlPlugin::new(config_path)
     }
 
     fn get_name(&self) -> &'static str {

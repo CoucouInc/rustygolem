@@ -122,9 +122,9 @@ impl State {
 
 #[async_trait]
 impl Plugin for Twitch {
-    async fn init() -> Result<Self> {
-        let config = Config::from_file_keyed("golem_config.dhall")
-            .context("Cannot read plugin_twitch.dhall")?;
+    async fn init(config_path: &str) -> Result<Self> {
+        let config = Config::from_file_keyed(config_path)
+            .context(format!("Cannot read {config_path}"))?;
 
         let auth_client = reqwest::Client::default();
         let client = HelixClient::new();

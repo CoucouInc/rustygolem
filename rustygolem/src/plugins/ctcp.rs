@@ -16,7 +16,7 @@ pub struct Ctcp {}
 
 #[async_trait]
 impl Plugin for Ctcp {
-    async fn init() -> Result<Self> {
+    async fn init(_config_path: &str) -> Result<Self> {
         Ok(Ctcp {})
     }
 

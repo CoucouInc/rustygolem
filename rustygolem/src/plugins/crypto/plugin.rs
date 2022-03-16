@@ -28,7 +28,7 @@ pub struct Crypto {}
 
 #[async_trait]
 impl Plugin for Crypto {
-    async fn init() -> Result<Self> {
+    async fn init(_config_path: &str) -> Result<Self> {
         let _db_conn: Result<_> = tokio::task::spawn_blocking(|| {
             let conn = db::establish_connection()?;
             db::run_migrations(&conn)?;

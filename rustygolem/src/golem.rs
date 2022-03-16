@@ -35,13 +35,13 @@ impl Golem {
     #[allow(dead_code)]
     pub async fn new_from_config(
         irc_config: irc::client::data::Config,
-        golem_config_path: String,
+        golem_config_path: &str,
     ) -> Result<Self> {
         let irc_client = irc::client::Client::from_config(irc_config).await?;
-        let conf = GolemConfig::from_path(golem_config_path.clone())
+        let conf = GolemConfig::from_path(&golem_config_path)
             .with_context(|| format!("Cannot parse golem config at {golem_config_path}"))?;
         let plugins = stream::iter(conf.plugins)
-            .map(|name| async move { init_plugin(&name).await })
+            .map(|name| async move { init_plugin(&golem_config_path, &name).await })
             .buffer_unordered(10)
             .collect::<Vec<_>>()
             .await
@@ -200,17 +200,19 @@ impl Golem {
     }
 }
 
-async fn init_plugin(name: &str) -> Result<Box<dyn Plugin>> {
+async fn init_plugin(config_path: &str, name: &str) -> Result<Box<dyn Plugin>> {
     // TODO: generate a macro which automatically match the name
     // with the correct module based on the exports of crate::plugins
     let plugin = match name {
-        "crypto" => plugin::new_boxed::<plugins::Crypto>().await,
-        "ctcp" => plugin::new_boxed::<plugins::Ctcp>().await,
-        "echo" => plugin::new_boxed::<plugins::Echo>().await,
-        "joke" => plugin::new_boxed::<plugins::Joke>().await,
-        "republican_calendar" => plugin::new_boxed::<plugins::RepublicanCalendar>().await,
-        "twitch" => plugin::new_boxed::<plugins::Twitch>().await,
-        "url" => plugin::new_boxed::<plugin_url::UrlPlugin>().await,
+        "crypto" => plugin::new_boxed::<plugins::Crypto>(config_path).await,
+        "ctcp" => plugin::new_boxed::<plugins::Ctcp>(config_path).await,
+        "echo" => plugin::new_boxed::<plugins::Echo>(config_path).await,
+        "joke" => plugin::new_boxed::<plugins::Joke>(config_path).await,
+        "republican_calendar" => {
+            plugin::new_boxed::<plugins::RepublicanCalendar>(config_path).await
+        }
+        "twitch" => plugin::new_boxed::<plugins::Twitch>(config_path).await,
+        "url" => plugin::new_boxed::<plugin_url::UrlPlugin>(config_path).await,
         _ => return Err(anyhow!("Unknown plugin name: {}", name)),
     };
     let plugin = plugin.with_context(|| format!("Cannot initalize plugin {}", name))?;

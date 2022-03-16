@@ -7,7 +7,7 @@ pub struct Joke {}
 
 #[async_trait]
 impl Plugin for Joke {
-    async fn init() -> Result<Self> {
+    async fn init(_config_path: &str) -> Result<Self> {
         Ok(Joke {})
     }
 
