@@ -12,12 +12,12 @@ use std::{
 use async_trait::async_trait;
 use irc::proto::{Command, Message};
 use nom::{
-    bytes::complete::{tag, take_while},
+    branch::alt,
+    bytes::complete::{tag, take_while, take_till1, take_while1},
     character::complete::{digit1, multispace0, multispace1},
     combinator::{all_consuming, map, opt},
-    multi::separated_list0,
-    sequence::{pair, preceded, terminated},
-    Finish, IResult,
+    sequence::{delimited, pair, preceded, terminated, tuple},
+    Finish, IResult, multi::separated_list0,
 };
 use parking_lot::Mutex;
 use plugin_core::{Error, Plugin, Result};
@@ -37,8 +37,7 @@ pub struct UrlPlugin {
 }
 
 impl UrlPlugin {
-    fn new(config_path: &str) -> Result<Self>
-    {
+    fn new(config_path: &str) -> Result<Self> {
         // let path = "golem_config.dhall";
         let yt_config: YtConfig =
             serde_dhall::from_file(config_path)
@@ -87,12 +86,16 @@ impl UrlPlugin {
 
                         let target = mb_target.map(|t| format!("{t}: ")).unwrap_or_default();
                         let msg = format!("{target}{message}");
-                        log::debug!("message to send: {msg:?}");
                         return Ok(Some(Command::PRIVMSG(channel.to_string(), msg).into()));
                     }
-                    Cmd::Search(_term, _mb_target) => {
-                        // TODO: implement that
-                        return Ok(None);
+                    Cmd::Search(term, _mb_target) => {
+                        let channel = match msg.response_target() {
+                            None => return Ok(None),
+                            Some(target) => target,
+                        };
+                        log::info!("searching yt for term {term}");
+                        let msg = self.yt_search(term).await?;
+                        return Ok(Some(Command::PRIVMSG(channel.to_string(), msg).into()));
                     }
                 }
             }
@@ -325,6 +328,110 @@ impl UrlPlugin {
                 ctx: format!("Failed to fetch {resource} with id {resource_id}"),
             })
     }
+
+    async fn yt_search(&self, search_term: &str) -> Result<String> {
+        let key = match &self.yt_api_key {
+            Some(k) => k,
+            None => {
+                return Ok(format!(
+                    "No youtube api key provided, can't search: {search_term}"
+                ))
+            }
+        };
+
+        let raw_resp = self
+            .client
+            .get("https://www.googleapis.com/youtube/v3/search")
+            .query(&[("key", key)])
+            .query(&[("part", "snippet")])
+            // .query(&[("type", "channel")])
+            .query(&[("q", search_term)])
+            .send()
+            .await
+            .map_err(|err| Error::Wrapped {
+                source: Box::new(err),
+                ctx: format!("Failed to search yt for {search_term}"),
+            })?;
+
+        let jsonbody: std::result::Result<SearchListResponse, _> = raw_resp.json().await;
+
+        match jsonbody {
+            Ok(search_resp) => match search_resp.items.as_ref().and_then(|v| v.first()) {
+                Some(search_result) => {
+                    let kind = search_result
+                        .id
+                        .as_ref()
+                        .and_then(|x| x.kind.as_ref())
+                        .unwrap();
+
+                    match &kind[..] {
+                        "youtube#channel" => {
+                            let channel_id = search_result
+                                .snippet
+                                .as_ref()
+                                .and_then(|x| x.channel_id.as_ref())
+                                .unwrap();
+                            let channel_title = search_result
+                                .snippet
+                                .as_ref()
+                                .and_then(|x| x.channel_title.as_deref())
+                                .unwrap_or("no channel found");
+                            Ok(format!("channel: [{channel_title}] https://www.youtube.com/channel/{channel_id}"))
+                        }
+                        "youtube#playlist" => {
+                            let title = search_result
+                                .snippet
+                                .as_ref()
+                                .unwrap()
+                                .title
+                                .as_ref()
+                                .unwrap();
+
+                            let playlist_id = search_result
+                                .id
+                                .as_ref()
+                                .and_then(|x| x.playlist_id.as_ref())
+                                .unwrap();
+
+                            Ok(format!("playlist: {title} https://www.youtube.com/playlist?list={playlist_id}"))
+                        }
+                        "youtube#video" => {
+                            let title = search_result
+                                .snippet
+                                .as_ref()
+                                .unwrap()
+                                .title
+                                .as_ref()
+                                .unwrap();
+
+                            let vid_id = search_result
+                                .id
+                                .as_ref()
+                                .and_then(|x| x.video_id.as_ref())
+                                .unwrap();
+
+                            let channel_title = search_result
+                                .snippet
+                                .as_ref()
+                                .and_then(|x| x.channel_title.as_deref())
+                                .unwrap_or("no channel found");
+
+                            Ok(format!("{title} [{channel_title}] https://www.youtube.com/watch?v={vid_id}"))
+                        }
+                        _ => return Ok(format!("Rien trouvé pour {search_term} /o\\")),
+                    }
+                }
+                None => return Ok(format!("Rien trouvé pour {search_term} /o\\")),
+            },
+            Err(err) => {
+                log::error!("Can't parse yt response for {search_term}\n{:?}", err);
+                return Err(Error::Wrapped {
+                    source: Box::new(err),
+                    ctx: format!("Failed to parse json response for {search_term}"),
+                });
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -368,7 +475,6 @@ enum Cmd<'msg> {
     /// optional url index, optional target nick
     Url(Option<usize>, Option<&'msg str>),
     /// search term, optional target nick
-    #[allow(dead_code)]
     Search(&'msg str, Option<&'msg str>),
 }
 
@@ -376,23 +482,38 @@ enum Cmd<'msg> {
 fn parse_command(msg: &str) -> Option<Cmd<'_>> {
     let cmd = preceded(
         parsing_utils::command_prefix,
-        // alt((
+        alt((
             map(
                 parsing_utils::with_target(pair(tag("url"), opt(preceded(multispace1, digit1)))),
                 |((_, mb_idx), mb_target)| {
                     let idx = mb_idx.and_then(|raw| str::parse(raw).ok());
                     Cmd::Url(idx, mb_target)
                 },
-            )
-            // ,
-            // map(
-            //     parsing_utils::with_target(pair(
-            //         tag("yt_search"),
-            //         preceded(multispace1, parsing_utils::word),
-            //     )),
-            //     |_| todo!(),
-            // ),
-        // )),
+            ),
+            map(
+                preceded(
+                    pair(tag("yt_search"), multispace1),
+                    alt((
+                        map(
+                            tuple((
+                                take_till1(|c| c == '>'),
+                                delimited(
+                                    pair(nom::character::complete::char('>'), multispace0),
+                                    parsing_utils::word,
+                                    multispace0,
+                                ),
+                            )),
+                            |(x, t)| (x, Some(t)),
+                        ),
+                        map(
+                            terminated(take_while1(|c| c != '>'), nom::combinator::eof),
+                            |x| (x, None),
+                        ),
+                    )),
+                ),
+                |(x, t)| Cmd::Search(x, t),
+            ),
+        )),
     );
     all_consuming(terminated(cmd, multispace0))(msg)
         .finish()
@@ -573,6 +694,61 @@ mod test {
         assert_eq!(
             parse_command("λurl 3 > charlie"),
             Some(Cmd::Url(Some(3), Some("charlie")))
+        );
+    }
+
+    #[test]
+    fn test_command_search_with_target() {
+        assert_eq!(
+            parse_command("λyt_search coucou1 and coucou2 > charlie"),
+            Some(Cmd::Search("coucou1 and coucou2 ", Some("charlie")))
+        );
+    }
+
+    fn grmbl_till(raw: &str) -> IResult<&str, &str> {
+        terminated(
+            take_while1(|c| c != '>'),
+            tuple((
+                nom::character::complete::char('>'),
+                multispace0,
+                parsing_utils::word,
+                multispace0,
+                nom::combinator::eof,
+            )),
+        )(raw)
+        // rest(raw)
+    }
+
+    #[test]
+    fn test_take_till() {
+        let input = "coucou > blah";
+        let res = all_consuming(grmbl_till)(input).finish().ok();
+        assert_eq!(res, Some(("", "coucou ")));
+    }
+
+    #[test]
+    fn test_command_search_multi_word() {
+        assert_eq!(
+            parse_command("λyt_search coucou and charlie"),
+            Some(Cmd::Search("coucou and charlie", None))
+        );
+    }
+
+    #[test]
+    fn test_command_search_missing_search() {
+        assert_eq!(parse_command("λyt_search"), None);
+    }
+
+    #[test]
+    fn test_command_search_missing_search_with_target() {
+        assert_eq!(parse_command("λyt_search > charlie"), None);
+    }
+
+    #[test]
+    fn test_command_search() {
+        assert_eq!(
+            parse_command("λyt_search coucou"),
+            Some(Cmd::Search("coucou", None))
         );
     }
 

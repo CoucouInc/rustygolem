@@ -1,5 +1,5 @@
 use nom::{
-    bytes::complete::take_till,
+    bytes::complete::take_till1,
     character::complete::{multispace0, multispace1},
     combinator::{map, opt},
     error::ParseError,
@@ -26,7 +26,7 @@ pub fn target<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'
 }
 
 pub fn word<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E> {
-    take_till(|c| c == ' ' || c == '\t' || c == '\n' || c == '\r')(input)
+    take_till1(|c| c == ' ' || c == '\t' || c == '\n' || c == '\r')(input)
 }
 
 /// Utility to parse common command prefix

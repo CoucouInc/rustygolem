@@ -53,9 +53,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // .query(&[("id", "Hio2lzkEUmo")])
         .query(&[("key", api_key)])
         .query(&[("part", "snippet")])
-        .query(&[("type", "channel")])
-        .query(&[("type", "video")])
-        .query(&[("type", "playlist")])
+        // .query(&[("type", "channel")])
+        // .query(&[("type", "video")])
+        // .query(&[("type", "playlist")])
         .query(&[("q", q)])
         .send()
         .await?
