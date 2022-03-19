@@ -41,7 +41,7 @@ impl Golem {
         let conf = GolemConfig::from_path(&golem_config_path)
             .with_context(|| format!("Cannot parse golem config at {golem_config_path}"))?;
         let plugins = stream::iter(conf.plugins)
-            .map(|name| async move { init_plugin(&golem_config_path, &name).await })
+            .map(|name| async move { init_plugin(golem_config_path, &name).await })
             .buffer_unordered(10)
             .collect::<Vec<_>>()
             .await
@@ -151,18 +151,27 @@ impl Golem {
             let tx = tx.clone();
             // The logic here is a bit meh.
             // need to create an intermediate channel to add the plugin name
-            // to the message
+            // to the message. Would be nice to be able to map over a channel
             async move {
                 let name = p.get_name();
                 let (plug_tx, mut plug_rx) = mpsc::channel(1);
-                p.run(plug_tx)
-                    .await
-                    .with_context(|| format!("Plugin {}.run() failed", p.get_name()))?;
-                while let Some(plugin_message) = plug_rx.recv().await {
-                    tx.send((name, plugin_message))
-                        .await
-                        .with_context(|| format!("Plugin {}.run() failed", p.get_name()))?;
-                }
+                futures::future::try_join(
+                    async {
+                        p.run(plug_tx)
+                            .await
+                            .with_context(|| format!("Plugin {}.run() failed", p.get_name()))?;
+                        Ok::<(), anyhow::Error>(())
+                    },
+                    async {
+                        while let Some(plugin_message) = plug_rx.recv().await {
+                            tx.send((name, plugin_message))
+                                .await
+                                .with_context(|| format!("Plugin {}.run() failed", p.get_name()))?;
+                        };
+                        Ok::<(), anyhow::Error>(())
+                    },
+                )
+                .await?;
                 Ok::<(), anyhow::Error>(())
             }
         });
@@ -176,9 +185,6 @@ impl Golem {
         Ok(())
     }
 
-    // TODO, pair the message with the plugin ID, so we can avoid calling
-    // out_message for the plugin responsible for sending the message
-    // and thus, avoiding infinite loop (at least the simple ones)
     async fn outbound_message(&self, message: &(&'static str, Message)) -> Result<()> {
         // TODO don't crash if a plugin returns an error
         futures::stream::iter(self.plugins.iter())
