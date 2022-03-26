@@ -63,7 +63,7 @@ impl UrlPlugin {
         let mut seen_urls = self.seen_urls.lock();
         let e = seen_urls.entry(channel.to_string()).or_default();
         for url in urls {
-            log::debug!("Adding url to chan: {url}");
+            log::info!("Adding {url} to chan {channel}");
             e.push_back(url);
             if e.len() > 10 {
                 e.pop_front();
@@ -206,8 +206,14 @@ impl UrlPlugin {
                 .into_iter()
                 .collect::<String>()
                 .replace("\n", " ");
-            if title.len() > 100 {
-                Ok(format!("{}[…] [{url}]", &title[..100]))
+
+            // Simply slicing the string like title[..100] will panic if
+            // it stops across an utf-8 codepoint boundary.
+            // So need to iterate across real chars to split properly.
+            let char_len = title.chars().count();
+            if char_len > 100 {
+                let f = title.chars().take(100).collect::<String>();
+                Ok(format!("{}[…] [{url}]", f))
             } else {
                 Ok(format!("{title} [{url}]"))
             }
