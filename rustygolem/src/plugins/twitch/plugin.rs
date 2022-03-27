@@ -24,11 +24,11 @@ use twitch_api2::{
     HelixClient,
 };
 
-use plugin_core::{Plugin, Result};
 use crate::plugins::twitch::{
     config::{Config, Message},
     webhook_server,
 };
+use plugin_core::{Plugin, Result};
 
 use crate::utils::parser;
 use futures::{StreamExt, TryStreamExt};
@@ -123,8 +123,8 @@ impl State {
 #[async_trait]
 impl Plugin for Twitch {
     async fn init(config_path: &str) -> Result<Self> {
-        let config = Config::from_file_keyed(config_path)
-            .context(format!("Cannot read {config_path}"))?;
+        let config =
+            Config::from_file_keyed(config_path).context(format!("Cannot read {config_path}"))?;
 
         let auth_client = reqwest::Client::default();
         let client = HelixClient::new();
@@ -222,26 +222,15 @@ impl Twitch {
                         } else {
                             format!("({})", game)
                         };
-                        let irc_nick = self
-                            .config
-                            .watched_streams
-                            .iter()
-                            .find_map(|s| {
-                                if s.nickname == target.nickname {
-                                    Some(s.irc_nick.to_string())
-                                } else {
-                                    None
-                                }
-                            })
-                            .unwrap_or_else(|| target.nickname.to_string());
 
+                        let irc_nick = self.to_irc_nick(nick.clone());
                         let message = format!(
                             "Le stream de {} est maintenant live at {} {}!",
                             irc_nick, url, game
                         );
 
                         log::info!("Stream online: {}", &message);
-                        self.state.add_stream(nick.clone(), stream);
+                        self.state.add_stream(nick, stream);
                         for chan in &target.irc_channels {
                             let cmd = Command::PRIVMSG(chan.clone(), message.clone()).into();
                             log::info!("Stream online command to chan: {}, {:?}", &chan, &cmd);
@@ -279,8 +268,9 @@ impl Twitch {
                         log::warn!("Got an offline notification for a stream not marked live");
                     }
                     Some(_s) => {
+                        let nick = self.to_irc_nick(target.nickname.clone());
                         let message =
-                                    format!("{} a arreté de streamer pour le moment. N'oubliez pas de like&subscribe.", target.nickname);
+                                    format!("{} a arreté de streamer pour le moment. N'oubliez pas de like&subscribe.", nick);
                         log::info!("Stream offline: {}", &message);
                         for chan in &target.irc_channels {
                             tx.send(Command::PRIVMSG(chan.clone(), message.clone()).into())
@@ -578,6 +568,21 @@ impl Twitch {
             })?;
 
         Ok(())
+    }
+
+    /// convert a twitch nickname to the corresponding irc nickname
+    fn to_irc_nick(&self, twitch_nick: Nickname) -> String {
+        self.config
+            .watched_streams
+            .iter()
+            .find_map(|s| {
+                if s.nickname == twitch_nick {
+                    Some(s.irc_nick.to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| twitch_nick.to_string())
     }
 }
 
