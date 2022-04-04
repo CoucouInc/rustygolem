@@ -453,6 +453,10 @@ impl Plugin for UrlPlugin {
     async fn in_message(&self, msg: &Message) -> Result<Option<Message>> {
         self.in_msg(msg).await
     }
+
+    fn ignore_blacklisted_users(&self) -> bool {
+        false
+    }
 }
 
 fn parse_urls(msg: &str) -> Result<Vec<Url>> {

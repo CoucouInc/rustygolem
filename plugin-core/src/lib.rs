@@ -56,6 +56,14 @@ pub trait Plugin: Sync + Send {
     async fn out_message(&self, msg: &Message) -> Result<()> {
         Ok(())
     }
+
+    /// if the plugin should have a special handling for usually ignored users
+    /// (typically, other bots), override this to return false.
+    /// In this case `in_message` will also be invoked for messages coming from
+    /// these blacklisted users.
+    fn ignore_blacklisted_users(&self) -> bool {
+        true
+    }
 }
 
 pub async fn new_boxed<T>(config_path: &str) -> Result<Box<dyn Plugin>>

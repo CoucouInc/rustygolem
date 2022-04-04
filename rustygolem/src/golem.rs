@@ -96,13 +96,6 @@ impl Golem {
         };
 
         while let Some(irc_message) = stream.next().await.transpose()? {
-            if let Some(source) = irc_message.source_nickname() {
-                if self.blacklisted_users.contains(&source.to_string()) {
-                    log::debug!("message from blacklisted user: {}, discarding", source);
-                    continue;
-                }
-            }
-
             let messages = self
                 .plugins_in_messages(&irc_message)
                 .await
@@ -126,6 +119,18 @@ impl Golem {
         futures::stream::iter(self.plugins.iter().zip(txs))
             .map(Ok)
             .try_for_each_concurrent(5, |(plugin, tx)| async move {
+                if let Some(source) = msg.source_nickname() {
+                    if plugin.ignore_blacklisted_users()
+                        && self.blacklisted_users.contains(&source.to_string())
+                    {
+                        log::debug!("Message from blacklisted user: {}, discarding", source);
+                        if tx.send(None).is_err() {
+                            return Err(anyhow!("cannot send plugin message !"));
+                        };
+                        return Ok::<(), anyhow::Error>(());
+                    }
+                }
+
                 let mb_msg = plugin.in_message(msg).await.with_context(|| {
                     format!("in_message error from plugin {}", plugin.get_name())
                 })?;
@@ -167,7 +172,7 @@ impl Golem {
                             tx.send((name, plugin_message))
                                 .await
                                 .with_context(|| format!("Plugin {}.run() failed", p.get_name()))?;
-                        };
+                        }
                         Ok::<(), anyhow::Error>(())
                     },
                 )
