@@ -6,18 +6,19 @@ use serde::{de::DeserializeOwned, Deserialize};
 use std::{
     borrow::Cow,
     collections::{HashMap, VecDeque},
-    sync::Arc,
+    sync::Arc, time::Duration,
 };
 
 use async_trait::async_trait;
 use irc::proto::{Command, Message};
 use nom::{
     branch::alt,
-    bytes::complete::{tag, take_while, take_till1, take_while1},
+    bytes::complete::{tag, take_till1, take_while, take_while1},
     character::complete::{digit1, multispace0, multispace1},
     combinator::{all_consuming, map, opt},
+    multi::separated_list0,
     sequence::{delimited, pair, preceded, terminated, tuple},
-    Finish, IResult, multi::separated_list0,
+    Finish, IResult,
 };
 use parking_lot::Mutex;
 use plugin_core::{Error, Plugin, Result};
@@ -125,7 +126,13 @@ impl UrlPlugin {
     }
 
     async fn get_regular_url(&self, url: &Url) -> Result<String> {
-        let resp = self.client.get(url.clone()).send().await;
+        log::info!("Querying url {}", url);
+        let resp = self
+            .client
+            .get(url.clone())
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await;
 
         let resp = match resp {
             Ok(r) => r,
@@ -151,7 +158,7 @@ impl UrlPlugin {
             _ => return Ok(format!("No valid content type found for {url}")),
         };
 
-        Ok(self.sniff_title(resp).await?)
+        self.sniff_title(resp).await
     }
 
     // To avoid someone pointing the bot at a gigantic file, filling up memory or disk
@@ -205,7 +212,7 @@ impl UrlPlugin {
                 .text()
                 .into_iter()
                 .collect::<String>()
-                .replace("\n", " ");
+                .replace('\n', " ");
 
             // Simply slicing the string like title[..100] will panic if
             // it stops across an utf-8 codepoint boundary.
@@ -243,7 +250,15 @@ impl UrlPlugin {
                         let snip = vid.snippet.as_ref().unwrap();
                         let title = snip.title.as_deref().unwrap_or("");
                         let chan = snip.channel_title.as_deref().unwrap_or("");
-                        Ok(format!("{} [{}] [{}]", &title, &chan, &url))
+                        let published_at = snip
+                            .published_at
+                            .as_deref()
+                            .map(|d| format!(" - {d}"))
+                            .unwrap_or_else(|| "".to_string());
+                        Ok(format!(
+                            "{} [{}{}] [{}]",
+                            &title, &chan, &published_at, &url
+                        ))
                     }
                     None => Ok(format!("Rien trouvé pour vidéo {vid_id}")),
                 }
@@ -282,10 +297,18 @@ impl UrlPlugin {
                         let snip = search_result.snippet.as_ref().unwrap();
                         let title = snip.channel_title.as_deref().unwrap_or("");
                         let description = snip.description.as_deref().unwrap_or("");
+                        let published_at = snip
+                            .published_at
+                            .as_deref()
+                            .map(|d| format!(" - {d}"))
+                            .unwrap_or_else(|| "".to_string());
                         if description.is_empty() {
-                            Ok(format!("Channel: {} [{}]", title, url))
+                            Ok(format!("Channel: {}{} [{}]", title, published_at, url))
                         } else {
-                            Ok(format!("Channel: {} ({}) [{}]", title, description, url))
+                            Ok(format!(
+                                "Channel: {}{} ({}) [{}]",
+                                title, published_at, description, url
+                            ))
                         }
                     }
                     None => Ok(format!("Pas trouvé de chan pour {chan_name}")),
@@ -320,6 +343,7 @@ impl UrlPlugin {
             .query(&[("id", &resource_id)])
             .query(&[("key", yt_api_key.to_owned())])
             .query(&[("part", "snippet")])
+            .timeout(Duration::from_secs(10))
             .send()
             .await
             .and_then(|x| x.error_for_status())
@@ -352,6 +376,7 @@ impl UrlPlugin {
             .query(&[("part", "snippet")])
             // .query(&[("type", "channel")])
             .query(&[("q", search_term)])
+            .timeout(Duration::from_secs(10))
             .send()
             .await
             .map_err(|err| Error::Wrapped {
