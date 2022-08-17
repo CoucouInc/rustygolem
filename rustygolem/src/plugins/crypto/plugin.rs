@@ -18,11 +18,11 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task;
 
-use plugin_core::{Plugin, Result, Error};
+use super::db;
 use crate::schema::crypto_rate::{self, dsl};
 use crate::utils::parser::{self, command_prefix};
-use super::db;
 use irc::proto::{Command, Message};
+use plugin_core::{Error, Plugin, Result};
 
 pub struct Crypto {}
 
@@ -219,7 +219,13 @@ impl CryptoCoin {
             .await
             .context(format!("Error while fetching response from {}", url))?;
 
-        log::info!("cryptowatch response: {:?}", json_resp);
+        log::info!(
+            "Got price for {} at {} cost {} remaining allowance {}",
+            &self,
+            json_resp.result.price,
+            json_resp.allowance.cost,
+            json_resp.allowance.remaining
+        );
         Ok(json_resp.result.price)
     }
 }
@@ -282,13 +288,14 @@ async fn get_and_save_all_rates() -> anyhow::Result<()> {
 
     task::spawn_blocking(move || {
         let conn = db::establish_connection()?;
-        let vals = (&btc_row, &eth_row, &doge_row, &ripple_row, &algo_row);
+        let vals = vec![&btc_row, &eth_row, &doge_row, &ripple_row, &algo_row];
         diesel::insert_into(crypto_rate::table)
-            .values(vals)
+            .values(vals.clone())
             .execute(&conn)
             .with_context(|| format!("Cannot insert {:?} into db", vals))
     })
     .await??;
+    log::info!("Successfully updated DB for crypto rates");
 
     Ok(())
 }
