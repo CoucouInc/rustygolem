@@ -473,12 +473,12 @@ impl RepublicanDate {
             (Fru, 28) => "du maïs",
             (Fru, 29) => "du marron",
             (Fru, 30) => "du panier",
-            (SC, 1) => "la fête de la vertu",
-            (SC, 2) => "la fête du génie",
-            (SC, 3) => "la fête du travail",
-            (SC, 4) => "la fête de l'opinion",
-            (SC, 5) => "la fête des récompenses",
-            (SC, 6) => "la fête de la révolution",
+            (SC, 1) => "de la fête de la vertu",
+            (SC, 2) => "de la fête du génie",
+            (SC, 3) => "de la fête du travail",
+            (SC, 4) => "de la fête de l'opinion",
+            (SC, 5) => "de la fête des récompenses",
+            (SC, 6) => "de la fête de la révolution",
             _ => "ERROR",
         }
     }
