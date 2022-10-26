@@ -1,7 +1,7 @@
-use plugin_core::{Plugin, Result};
 use crate::utils::parser;
 use async_trait::async_trait;
 use irc::proto::{Command, Message};
+use plugin_core::{Plugin, Result};
 
 pub struct Joke {}
 
@@ -41,7 +41,12 @@ async fn in_msg(msg: &Message) -> Result<Option<Message>> {
 }
 
 async fn handle_command(mb_target: Option<&str>) -> Option<String> {
-    let req = reqwest::Client::new()
+    let client = reqwest::ClientBuilder::new()
+        .user_agent("rustygolem: https://github.com/CoucouInc/rustygolem")
+        .build()
+        .unwrap();
+
+    let req = client
         .get("https://icanhazdadjoke.com")
         .header("Accept", "text/plain");
     let resp = match req.send().await {
@@ -63,6 +68,9 @@ async fn handle_command(mb_target: Option<&str>) -> Option<String> {
             ))
         }
     };
+
+    // https://github.com/CoucouInc/rustygolem/issues/9
+    let joke = joke.lines().collect::<Vec<_>>().join(" − ");
 
     Some(crate::utils::messages::with_target(&joke, &mb_target))
 }
