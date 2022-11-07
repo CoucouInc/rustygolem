@@ -223,7 +223,7 @@ impl Twitch {
                             format!("({})", game)
                         };
 
-                        let irc_nick = self.to_irc_nick(nick.clone());
+                        let irc_nick = self.to_irc_nick(nick.as_str());
                         let message = format!(
                             "Le stream de {} est maintenant live at {} {}!",
                             irc_nick, url, game
@@ -268,7 +268,7 @@ impl Twitch {
                         log::warn!("Got an offline notification for a stream not marked live");
                     }
                     Some(_s) => {
-                        let nick = self.to_irc_nick(target.nickname.clone());
+                        let nick = self.to_irc_nick(target.nickname.as_str());
                         let message =
                                     format!("{} a arreté de streamer pour le moment. N'oubliez pas de like&subscribe.", nick);
                         log::info!("Stream offline: {}", &message);
@@ -340,7 +340,7 @@ impl Twitch {
                 let message = if live_streams.is_empty() {
                     format!("{}Y'a personne qui stream ici, çaynul !", prefix)
                 } else {
-                    format_streams(live_streams.values())
+                    self.format_streams(live_streams.values())
                 };
                 return Ok(Some(
                     Command::PRIVMSG(response_target.to_string(), message).into(),
@@ -570,13 +570,48 @@ impl Twitch {
         Ok(())
     }
 
+    fn format_streams<'a, S>(&self, streams: S) -> String
+    where
+        S: Iterator<Item = &'a Stream>,
+    {
+        streams
+            .map(|s| self.format_stream(s))
+            .collect::<Vec<_>>()
+            .join("−")
+    }
+
+    fn format_stream(&self, stream: &Stream) -> String {
+        let game = stream.game_name.to_string();
+        let game = if game.is_empty() {
+            "".to_string()
+        } else {
+            format!("({})", game)
+        };
+        let time_fmt = time::macros::format_description!("[hour]:[minute] [period]");
+        let parsed = time::OffsetDateTime::parse(
+            stream.started_at.as_str(),
+            &time::format_description::well_known::Rfc3339,
+        )
+        .expect("valid RFC3339 timestamp for started_at");
+        let started_at = parsed.format(time_fmt).unwrap();
+        format!(
+            "{} {} started at {started_at} (https://www.twitch.tv/{})",
+            self.to_irc_nick(stream.user_name.as_str()),
+            game,
+            stream.user_login
+        )
+    }
+
     /// convert a twitch nickname to the corresponding irc nickname
-    fn to_irc_nick(&self, twitch_nick: Nickname) -> String {
+    fn to_irc_nick(&self, twitch_nick: &str) -> String {
+        // twitch nicknames as sent in the webhook events have casing
+        // but the login nicknames otherwise don't
+        let twitch_nick = twitch_nick.to_lowercase();
         self.config
             .watched_streams
             .iter()
             .find_map(|s| {
-                if s.nickname == twitch_nick {
+                if s.nickname.as_str() == twitch_nick {
                     Some(s.irc_nick.to_string())
                 } else {
                     None
@@ -584,31 +619,4 @@ impl Twitch {
             })
             .unwrap_or_else(|| twitch_nick.to_string())
     }
-}
-
-fn format_streams<'a, S>(streams: S) -> String
-where
-    S: Iterator<Item = &'a Stream>,
-{
-    streams.map(format_stream).collect::<Vec<_>>().join("−")
-}
-
-fn format_stream(stream: &Stream) -> String {
-    let game = stream.game_name.to_string();
-    let game = if game.is_empty() {
-        "".to_string()
-    } else {
-        format!("({})", game)
-    };
-    let time_fmt = time::macros::format_description!("[hour]:[minute] [period]");
-    let parsed = time::OffsetDateTime::parse(
-        stream.started_at.as_str(),
-        &time::format_description::well_known::Rfc3339,
-    )
-    .expect("valid RFC3339 timestamp for started_at");
-    let started_at = parsed.format(time_fmt).unwrap();
-    format!(
-        "{} {} started at {started_at} (https://www.twitch.tv/{})",
-        stream.user_name, game, stream.user_login
-    )
 }
