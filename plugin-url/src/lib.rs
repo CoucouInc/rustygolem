@@ -177,8 +177,8 @@ impl UrlPlugin {
             _ => return Ok(format!("No valid content type found for {url}")),
         };
 
-        // limit to 5kib download
-        let capa = 5 * 1024;
+        // don't download more than `capa` bytes (to avoid dos)
+        let capa = 10 * 1024;
         let mut read_buf = bytes::BytesMut::with_capacity(capa);
 
         while let Some(chunk) = resp.chunk().await.transpose() {
