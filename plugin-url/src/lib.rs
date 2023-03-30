@@ -19,7 +19,7 @@ use nom::{
     combinator::{all_consuming, map, opt},
     multi::separated_list0,
     sequence::{delimited, pair, preceded, terminated, tuple},
-    Finish, IResult,
+    AsChar, Finish, IResult, InputTakeAtPosition,
 };
 use parking_lot::Mutex;
 use plugin_core::{Error, Plugin, Result};
@@ -422,8 +422,23 @@ impl Plugin for UrlPlugin {
     }
 }
 
-fn parse_urls(msg: &str) -> Result<Vec<Url>> {
-    match separated_list0(multispace1, parse_url)(msg) {
+const SPACE_CHARS: [char; 5] = [' ', '\u{00A0}', '\t', '\r', '\n'];
+
+// this is a copy of multispace1 from nom, but expanded to also account
+// for some additional characters
+pub fn custom_multispace1<T, E: nom::error::ParseError<T>>(input: T) -> IResult<T, T, E>
+where
+    T: InputTakeAtPosition,
+    <T as InputTakeAtPosition>::Item: AsChar + Clone,
+{
+    input.split_at_position1_complete(
+        |item| !SPACE_CHARS.contains(&item.as_char()),
+        nom::error::ErrorKind::MultiSpace,
+    )
+}
+
+fn parse_urls<'a>(msg: &'a str) -> Result<Vec<Url>> {
+    match separated_list0(custom_multispace1, parse_url)(msg) {
         Ok((_, urls)) => Ok(urls.into_iter().flatten().collect()),
         Err(_) => Err(plugin_core::Error::Synthetic(format!(
             "Cannot parse url from {msg}"
@@ -433,7 +448,7 @@ fn parse_urls(msg: &str) -> Result<Vec<Url>> {
 
 fn parse_url(raw: &str) -> IResult<&str, Option<Url>> {
     map(
-        take_while(|c: char| !(c == ' ' || c == '\t' || c == '\r' || c == '\n')),
+        take_while(|c: char| !SPACE_CHARS.contains(&c)),
         |word| match Url::parse(word) {
             Ok(u) if !u.cannot_be_a_base() && (u.scheme() == "http" || u.scheme() == "https") => {
                 Some(u)
@@ -611,7 +626,7 @@ pub async fn sniff_title(mut resp: reqwest::Response) -> Result<String> {
         }
     }
 
-// <title data-rh=\"true\">Greta Thunberg carried away by police at German mine protest | AP News</title>
+    // <title data-rh=\"true\">Greta Thunberg carried away by police at German mine protest | AP News</title>
     let fragment = text_with_charset(&read_buf, &ct)?;
 
     let selector = scraper::Selector::parse("title").unwrap();
@@ -669,6 +684,11 @@ mod test {
             parse_urls("some stuff before  http://coucou.com").unwrap(),
             vec![Url::parse("http://coucou.com").unwrap()]
         );
+
+        assert_eq!(
+            parse_urls("some special chars : http://nbsp.com").unwrap(),
+            vec![Url::parse("http://nbsp.com").unwrap()]
+        )
     }
 
     #[test]
