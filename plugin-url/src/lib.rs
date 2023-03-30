@@ -6,7 +6,8 @@ use serde::{de::DeserializeOwned, Deserialize};
 use std::{
     borrow::Cow,
     collections::{HashMap, VecDeque},
-    sync::Arc, time::Duration,
+    sync::Arc,
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -162,71 +163,8 @@ impl UrlPlugin {
     }
 
     // To avoid someone pointing the bot at a gigantic file, filling up memory or disk
-    async fn sniff_title(&self, mut resp: reqwest::Response) -> Result<String> {
-        let ct = resp.headers().get(reqwest::header::CONTENT_TYPE).cloned();
-        let url = resp.url().to_string();
-
-        // only bother to look further if the content type looks like html or text
-        match ct.as_ref().and_then(|h| h.to_str().ok()) {
-            Some(ct) if ct.contains("text") || ct.contains("html") => (),
-            Some(ct) => {
-                return Ok(format!(
-                    "Cannot extract title from content type {ct} for {url}",
-                ))
-            }
-            _ => return Ok(format!("No valid content type found for {url}")),
-        };
-
-        // don't download more than `capa` bytes (to avoid dos)
-        let capa = 10 * 1024;
-        let mut read_buf = bytes::BytesMut::with_capacity(capa);
-
-        while let Some(chunk) = resp.chunk().await.transpose() {
-            let chunk = chunk.map_err(|err| Error::Wrapped {
-                source: Box::new(err),
-                ctx: format!("Failed to read bytes from response for url {}", url),
-            })?;
-
-            // make sure we don't read more than the allocated capacity
-            let l = (capa - read_buf.len()).min(chunk.len());
-            read_buf.extend_from_slice(&chunk[0..l]);
-            if read_buf.len() >= capa {
-                break;
-            }
-        }
-
-        let fragment = text_with_charset(&read_buf, &ct)?;
-
-        let selector = scraper::Selector::parse("title").unwrap();
-        // there can be a problem since `<title>coucou` is parsed as the
-        // full title. So need to grab enough bytes from the network
-        // to be reasonably sure that we got the full title
-        // Also, ignore any parse error. The parser is very lenient and can
-        // gives us a title even if there are other error in the document
-        if let Some(title) = scraper::Html::parse_document(&fragment)
-            .select(&selector)
-            .next()
-        {
-            log::debug!("found title: {title:?}");
-            let title = title
-                .text()
-                .into_iter()
-                .collect::<String>()
-                .replace('\n', " ");
-
-            // Simply slicing the string like title[..100] will panic if
-            // it stops across an utf-8 codepoint boundary.
-            // So need to iterate across real chars to split properly.
-            let char_len = title.chars().count();
-            if char_len > 100 {
-                let f = title.chars().take(100).collect::<String>();
-                Ok(format!("{}[…] [{url}]", f))
-            } else {
-                Ok(format!("{title} [{url}]"))
-            }
-        } else {
-            Ok(format!("No title found at {url}"))
-        }
+    async fn sniff_title(&self, resp: reqwest::Response) -> Result<String> {
+        sniff_title(resp).await
     }
 
     async fn get_yt_url(&self, url: &Url, yt_api_key: &str) -> Result<String> {
@@ -638,6 +576,74 @@ fn text_with_charset(bytes: &[u8], content_type: &Option<HeaderValue>) -> Result
         CoderResult::OutputFull => (),
     }
     Ok(dst)
+}
+
+pub async fn sniff_title(mut resp: reqwest::Response) -> Result<String> {
+    let ct = resp.headers().get(reqwest::header::CONTENT_TYPE).cloned();
+    let url = resp.url().to_string();
+
+    // only bother to look further if the content type looks like html or text
+    match ct.as_ref().and_then(|h| h.to_str().ok()) {
+        Some(ct) if ct.contains("text") || ct.contains("html") => (),
+        Some(ct) => {
+            return Ok(format!(
+                "Cannot extract title from content type {ct} for {url}",
+            ))
+        }
+        _ => return Ok(format!("No valid content type found for {url}")),
+    };
+
+    // don't download more than `capa` bytes (to avoid dos)
+    let capa = 10 * 1024;
+    let mut read_buf = bytes::BytesMut::with_capacity(capa);
+
+    while let Some(chunk) = resp.chunk().await.transpose() {
+        let chunk = chunk.map_err(|err| Error::Wrapped {
+            source: Box::new(err),
+            ctx: format!("Failed to read bytes from response for url {}", url),
+        })?;
+
+        // make sure we don't read more than the allocated capacity
+        let l = (capa - read_buf.len()).min(chunk.len());
+        read_buf.extend_from_slice(&chunk[0..l]);
+        if read_buf.len() >= capa {
+            break;
+        }
+    }
+
+// <title data-rh=\"true\">Greta Thunberg carried away by police at German mine protest | AP News</title>
+    let fragment = text_with_charset(&read_buf, &ct)?;
+
+    let selector = scraper::Selector::parse("title").unwrap();
+    // there can be a problem since `<title>coucou` is parsed as the
+    // full title. So need to grab enough bytes from the network
+    // to be reasonably sure that we got the full title
+    // Also, ignore any parse error. The parser is very lenient and can
+    // gives us a title even if there are other error in the document
+    if let Some(title) = scraper::Html::parse_document(&fragment)
+        .select(&selector)
+        .next()
+    {
+        log::debug!("found title: {title:?}");
+        let title = title
+            .text()
+            .into_iter()
+            .collect::<String>()
+            .replace('\n', " ");
+
+        // Simply slicing the string like title[..100] will panic if
+        // it stops across an utf-8 codepoint boundary.
+        // So need to iterate across real chars to split properly.
+        let char_len = title.chars().count();
+        if char_len > 100 {
+            let f = title.chars().take(100).collect::<String>();
+            Ok(format!("{}[…] [{url}]", f))
+        } else {
+            Ok(format!("{title} [{url}]"))
+        }
+    } else {
+        Ok(format!("No title found at {url}"))
+    }
 }
 
 #[cfg(test)]

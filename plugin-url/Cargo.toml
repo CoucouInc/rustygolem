@@ -32,3 +32,7 @@ path = "src/bin/teststreaming.rs"
 [[bin]]
 name = "testyt"
 path = "src/bin/testyt.rs"
+
+[[bin]]
+name = "testsniff"
+path = "src/bin/test_sniff_url.rs"
