@@ -422,7 +422,12 @@ impl Plugin for UrlPlugin {
     }
 }
 
-const SPACE_CHARS: [char; 5] = [' ', '\u{00A0}', '\t', '\r', '\n'];
+// all characters considered as space by the regex \s
+const SPACE_CHARS: [char; 25] = [
+    '\t', '\n', '\u{b}', '\u{c}', '\r', ' ', '\u{85}', '\u{a0}', '\u{1680}', '\u{2000}',
+    '\u{2001}', '\u{2002}', '\u{2003}', '\u{2004}', '\u{2005}', '\u{2006}', '\u{2007}', '\u{2008}',
+    '\u{2009}', '\u{200a}', '\u{2028}', '\u{2029}', '\u{202f}', '\u{205f}', '\u{3000}',
+];
 
 // this is a copy of multispace1 from nom, but expanded to also account
 // for some additional characters
