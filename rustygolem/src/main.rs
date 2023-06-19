@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
         ..Config::default()
     };
 
-    golem::Golem::new_from_config(config, &opt.config)
+    golem::Golem::new_from_config(config, opt.config)
         .await?
         .run()
         .await

@@ -29,9 +29,25 @@ pub trait WrapError<T> {
     fn wrap(self) -> Result<T>;
 }
 
+pub struct Config {
+    pub config_path: String,
+}
+
+pub struct Initialised {
+    pub plugin: Box<dyn Plugin>,
+}
+
+impl<T: Plugin + 'static> std::convert::From<T> for Initialised {
+    fn from(value: T) -> Self {
+        Initialised {
+            plugin: Box::new(value),
+        }
+    }
+}
+
 #[async_trait]
 pub trait Plugin: Sync + Send {
-    async fn init(config_path: &str) -> Result<Self>
+    async fn init(config: &Config) -> Result<Initialised>
     where
         Self: Sized;
 
@@ -64,11 +80,4 @@ pub trait Plugin: Sync + Send {
     fn ignore_blacklisted_users(&self) -> bool {
         true
     }
-}
-
-pub async fn new_boxed<T>(config_path: &str) -> Result<Box<dyn Plugin>>
-where
-    T: Plugin + 'static,
-{
-    Ok(Box::new(T::init(config_path).await?))
 }

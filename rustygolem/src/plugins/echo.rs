@@ -2,15 +2,15 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use irc::proto::{Command, Message};
-use plugin_core::{Plugin, Result};
+use plugin_core::{Initialised, Plugin, Result};
 use tokio::sync::mpsc;
 
 pub struct Echo {}
 
 #[async_trait]
 impl Plugin for Echo {
-    async fn init(_config_path: &str) -> Result<Self> {
-        Ok(Echo {})
+    async fn init(_config: &plugin_core::Config) -> Result<Initialised> {
+        Ok(Initialised::from(Echo {}))
     }
 
     fn get_name(&self) -> &'static str {

@@ -1,5 +1,5 @@
 #![allow(clippy::upper_case_acronyms)]
-use plugin_core::{self, Plugin, Result};
+use plugin_core::{self, Plugin, Result, Initialised};
 use async_trait::async_trait;
 use irc::proto::{Command, Message};
 use nom::branch::alt;
@@ -16,8 +16,8 @@ pub struct Ctcp {}
 
 #[async_trait]
 impl Plugin for Ctcp {
-    async fn init(_config_path: &str) -> Result<Self> {
-        Ok(Ctcp {})
+    async fn init(_config: &plugin_core::Config) -> Result<Initialised> {
+        Ok(Initialised::from(Ctcp {}))
     }
 
     fn get_name(&self) -> &'static str {

@@ -22,13 +22,13 @@ use super::db;
 use crate::schema::crypto_rate::{self, dsl};
 use crate::utils::parser::{self, command_prefix};
 use irc::proto::{Command, Message};
-use plugin_core::{Error, Plugin, Result};
+use plugin_core::{Error, Initialised, Plugin, Result};
 
 pub struct Crypto {}
 
 #[async_trait]
 impl Plugin for Crypto {
-    async fn init(_config_path: &str) -> Result<Self> {
+    async fn init(_config: &plugin_core::Config) -> Result<Initialised> {
         let _db_conn: Result<_> = tokio::task::spawn_blocking(|| {
             let conn = db::establish_connection()?;
             db::run_migrations(&conn)?;
@@ -40,7 +40,7 @@ impl Plugin for Crypto {
             e
         })?;
 
-        Ok(Crypto {})
+        Ok(Initialised::from(Crypto {}))
     }
 
     fn get_name(&self) -> &'static str {

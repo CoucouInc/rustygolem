@@ -2,7 +2,7 @@ use crate::plugins;
 use anyhow::{Context, Result};
 use futures::prelude::*;
 use irc::proto::Message;
-use plugin_core::{self as plugin, Plugin};
+use plugin_core::Plugin;
 use serde::Deserialize;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -35,13 +35,21 @@ impl Golem {
     #[allow(dead_code)]
     pub async fn new_from_config(
         irc_config: irc::client::data::Config,
-        golem_config_path: &str,
+        golem_config_path: String,
     ) -> Result<Self> {
         let irc_client = irc::client::Client::from_config(irc_config).await?;
         let conf = GolemConfig::from_path(&golem_config_path)
             .with_context(|| format!("Cannot parse golem config at {golem_config_path}"))?;
+        let core_config = plugin_core::Config {
+            config_path: golem_config_path,
+        };
+        let core_config = Arc::new(core_config);
+
         let plugins = stream::iter(conf.plugins)
-            .map(|name| async move { init_plugin(golem_config_path, &name).await })
+            .map(|name| {
+                let core_config = Arc::clone(&core_config);
+                async move { init_plugin(&core_config, &name).await }
+            })
             .buffer_unordered(10)
             .collect::<Vec<_>>()
             .await
@@ -211,22 +219,20 @@ impl Golem {
     }
 }
 
-async fn init_plugin(config_path: &str, name: &str) -> Result<Box<dyn Plugin>> {
+async fn init_plugin(config: &plugin_core::Config, name: &str) -> Result<Box<dyn Plugin>> {
     // TODO: generate a macro which automatically match the name
     // with the correct module based on the exports of crate::plugins
     let plugin = match name {
-        "crypto" => plugin::new_boxed::<plugins::Crypto>(config_path).await,
-        "ctcp" => plugin::new_boxed::<plugins::Ctcp>(config_path).await,
-        "echo" => plugin::new_boxed::<plugins::Echo>(config_path).await,
-        "joke" => plugin::new_boxed::<plugins::Joke>(config_path).await,
-        "republican_calendar" => {
-            plugin::new_boxed::<plugins::RepublicanCalendar>(config_path).await
-        }
-        "twitch" => plugin::new_boxed::<plugin_twitch::Twitch>(config_path).await,
-        "url" => plugin::new_boxed::<plugin_url::UrlPlugin>(config_path).await,
+        "crypto" => plugins::Crypto::init(&config).await,
+        "ctcp" => plugins::Ctcp::init(&config).await,
+        "echo" => plugins::Echo::init(&config).await,
+        "joke" => plugins::Joke::init(&config).await,
+        "republican_calendar" => plugins::RepublicanCalendar::init(&config).await,
+        "twitch" => plugin_twitch::Twitch::init(&config).await,
+        "url" => plugin_url::UrlPlugin::init(&config).await,
         _ => return Err(anyhow!("Unknown plugin name: {}", name)),
     };
     let plugin = plugin.with_context(|| format!("Cannot initalize plugin {}", name))?;
     log::info!("Plugin initialized: {}", name);
-    Ok(plugin)
+    Ok(plugin.plugin)
 }

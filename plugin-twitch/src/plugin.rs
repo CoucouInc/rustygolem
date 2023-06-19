@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 // use irc::client::prelude::Message;
-use plugin_core::{Plugin, Result};
+use plugin_core::{Plugin, Result, Initialised};
 
 use std::{
     collections::HashMap,
@@ -32,10 +32,8 @@ use crate::{
     webhook_server,
 };
 
-use plugin_core::utils::parser;
 use futures::{StreamExt, TryStreamExt};
-
-
+use plugin_core::utils::parser;
 
 #[derive(Debug)]
 pub struct Subscription {
@@ -126,7 +124,8 @@ impl State {
 
 #[async_trait]
 impl Plugin for Twitch {
-    async fn init(config_path: &str) -> Result<Self> {
+    async fn init(core_config: &plugin_core::Config) -> Result<Initialised> {
+        let config_path = core_config.config_path.as_str();
         let config =
             Config::from_file_keyed(config_path).context(format!("Cannot read {config_path}"))?;
 
@@ -142,12 +141,13 @@ impl Plugin for Twitch {
         .await
         .context("Cannot get app access token")?;
 
-        Ok(Twitch {
+        let plugin = Twitch {
             config,
             token: WrappedToken(token),
             client,
             state: Default::default(),
-        })
+        };
+        Ok(Initialised::from(plugin))
     }
 
     fn get_name(&self) -> &'static str {

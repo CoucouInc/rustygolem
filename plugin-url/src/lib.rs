@@ -22,7 +22,7 @@ use nom::{
     AsChar, Finish, IResult, InputTakeAtPosition,
 };
 use parking_lot::Mutex;
-use plugin_core::{Error, Plugin, Result};
+use plugin_core::{Error, Initialised, Plugin, Result};
 use url::Url;
 
 mod parsing_utils;
@@ -405,8 +405,9 @@ impl UrlPlugin {
 
 #[async_trait]
 impl Plugin for UrlPlugin {
-    async fn init(config_path: &str) -> Result<Self> {
-        UrlPlugin::new(config_path)
+    async fn init(config: &plugin_core::Config) -> Result<Initialised> {
+        let plugin = UrlPlugin::new(&config.config_path)?;
+        Ok(Initialised::from(plugin))
     }
 
     fn get_name(&self) -> &'static str {

@@ -1,15 +1,15 @@
-use plugin_core::{Plugin, Result};
 use crate::utils::parser;
 use anyhow::Context;
 use async_trait::async_trait;
 use irc::proto::{Command, Message};
+use plugin_core::{Initialised, Plugin, Result};
 
 pub struct RepublicanCalendar {}
 
 #[async_trait]
 impl Plugin for RepublicanCalendar {
-    async fn init(_config_path: &str) -> Result<Self> {
-        Ok(RepublicanCalendar {})
+    async fn init(_config: &plugin_core::Config) -> Result<Initialised> {
+        Ok(Initialised::from(RepublicanCalendar {}))
     }
 
     fn get_name(&self) -> &'static str {
