@@ -8,5 +8,9 @@ description = "Interface and core utils for golem plugins"
 anyhow = "1.0.53"
 async-trait = "0.1.52"
 irc = { version = "0.15.0", features = ["tls-native"]}
+nom = "7.1.3"
 thiserror = "1.0.30"
 tokio = { version = "1.12.0", features = ["sync"] }
+
+[dev-dependencies]
+pretty_assertions = "1.3.0"

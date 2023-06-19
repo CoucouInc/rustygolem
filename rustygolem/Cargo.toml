@@ -36,6 +36,7 @@ time = { version = "0.3.7", features = ["parsing", "macros", "formatting"]}
 republican-calendar = { path = "../republican-calendar" }
 plugin-core = { path = "../plugin-core" }
 plugin-url = { path = "../plugin-url" }
+plugin-twitch = { path = "../plugin-twitch" }
 
 [dev-dependencies]
 pretty_assertions = "0.6.1"

@@ -1,7 +1,11 @@
 use std::path::Path;
 
 use serde::Deserialize;
-use twitch_api2::{eventsub::stream::{StreamOfflineV1Payload, StreamOnlineV1Payload}, twitch_oauth2::{ClientId, ClientSecret}, types::Nickname};
+use twitch_api2::{
+    eventsub::stream::{StreamOfflineV1Payload, StreamOnlineV1Payload},
+    twitch_oauth2::{ClientId, ClientSecret},
+    types::Nickname,
+};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct StreamSpec {
@@ -44,8 +48,9 @@ pub struct Config {
 
 // tmp struct to parse the config from a file with other stuff in it
 #[derive(Deserialize)]
-struct TC{twitch: Config}
-
+struct TC {
+    twitch: Config,
+}
 
 impl Config {
     // pub fn from_file<P>(p: P) -> Result<Self, serde_dhall::Error>
@@ -64,9 +69,7 @@ impl Config {
         let tmp: TC = serde_dhall::from_file(p).parse()?;
         Ok(tmp.twitch)
     }
-
 }
-
 
 #[derive(Debug)]
 pub enum Message {

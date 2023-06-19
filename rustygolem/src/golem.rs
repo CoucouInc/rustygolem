@@ -222,7 +222,7 @@ async fn init_plugin(config_path: &str, name: &str) -> Result<Box<dyn Plugin>> {
         "republican_calendar" => {
             plugin::new_boxed::<plugins::RepublicanCalendar>(config_path).await
         }
-        "twitch" => plugin::new_boxed::<plugins::Twitch>(config_path).await,
+        "twitch" => plugin::new_boxed::<plugin_twitch::Twitch>(config_path).await,
         "url" => plugin::new_boxed::<plugin_url::UrlPlugin>(config_path).await,
         _ => return Err(anyhow!("Unknown plugin name: {}", name)),
     };

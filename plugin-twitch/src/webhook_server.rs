@@ -1,4 +1,4 @@
-use crate::plugins::twitch::errors::{self, TwitchError};
+use crate::errors::{self, TwitchError};
 use anyhow::Context;
 use hmac::{Hmac, Mac, NewMac};
 use rocket::{config::Shutdown, request::Outcome, State};
@@ -6,7 +6,8 @@ use std::num::ParseIntError;
 use tokio::sync::mpsc;
 use twitch_api2::eventsub;
 
-use crate::plugins::twitch::config::{Config, Message};
+// use crate::plugins::twitch::config::{Config, Message};
+use crate::config::{Config, Message};
 
 type HmacSha256 = Hmac<sha2::Sha256>;
 
@@ -185,3 +186,4 @@ pub async fn run(config: &Config, tx: mpsc::Sender<Message>) -> plugin_core::Res
         "twitch webhook server shut down".to_string(),
     ))
 }
+

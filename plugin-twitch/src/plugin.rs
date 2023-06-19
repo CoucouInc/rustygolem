@@ -1,10 +1,13 @@
+use async_trait::async_trait;
+// use irc::client::prelude::Message;
+use plugin_core::{Plugin, Result};
+
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
 
 use anyhow::Context;
-use async_trait::async_trait;
 use irc::client::prelude::Command;
 use irc::proto::Message as IrcMessage;
 use tokio::sync::mpsc;
@@ -24,14 +27,15 @@ use twitch_api2::{
     HelixClient,
 };
 
-use crate::plugins::twitch::{
+use crate::{
     config::{Config, Message},
     webhook_server,
 };
-use plugin_core::{Plugin, Result};
 
-use crate::utils::parser;
+use plugin_core::utils::parser;
 use futures::{StreamExt, TryStreamExt};
+
+
 
 #[derive(Debug)]
 pub struct Subscription {
@@ -162,7 +166,7 @@ impl Plugin for Twitch {
             Ok(())
         };
 
-        try_join!(consume_msg(), webhook_server::run(&self.config, twitch_tx))?;
+        tokio::try_join!(consume_msg(), webhook_server::run(&self.config, twitch_tx))?;
         Ok(())
     }
 
