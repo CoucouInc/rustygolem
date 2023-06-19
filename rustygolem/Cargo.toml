@@ -26,7 +26,6 @@ serde_json = "1.0.61"
 structopt = "0.3.21"
 tokio = { version = "1.12.0", features = ["full"] }
 twitch_api2 = { version = "0.6.0-rc.3", features = ["twitch_oauth2", "helix", "reqwest_client", "eventsub"] }
-rocket = "0.5.0-rc.1"
 hmac = "0.11.0"
 sha2 = "0.9.8"
 thiserror = "1.0.30"
@@ -37,6 +36,7 @@ republican-calendar = { path = "../republican-calendar" }
 plugin-core = { path = "../plugin-core" }
 plugin-url = { path = "../plugin-url" }
 plugin-twitch = { path = "../plugin-twitch" }
+axum = "0.6.18"
 
 [dev-dependencies]
 pretty_assertions = "0.6.1"

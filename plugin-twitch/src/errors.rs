@@ -1,4 +1,7 @@
-use rocket::http::Status;
+use axum::{
+    http::status::StatusCode,
+    response::{IntoResponse, Response},
+};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -7,6 +10,8 @@ pub enum TwitchSigError {
     Missing(&'static str),
     #[error("Invalid signature")]
     Invalid,
+    #[error("Invalid header value")]
+    InvalidHeader(#[from] axum::http::header::ToStrError),
     #[error("Missing env var for app secret")]
     MissingAppSecret(#[from] std::env::VarError),
 }
@@ -16,23 +21,44 @@ pub enum TwitchError {
     #[error("Invalid signature {0:?}")]
     InvalidSig(#[from] TwitchSigError),
 
-    #[error("RocketError")]
-    RocketError(Status),
+    #[error("HttpError {0}")]
+    HttpError(StatusCode),
 }
 
-impl<'r> rocket::response::Responder<'r, 'static> for TwitchError {
-    fn respond_to(self, _: &'r rocket::Request<'_>) -> rocket::response::Result<'static> {
-        let status = match &self {
-            TwitchError::InvalidSig(_) => Status::Forbidden,
-            TwitchError::RocketError(s) => *s,
-        };
-        let err_str = self.to_string();
-        rocket::response::Response::build()
-            .sized_body(err_str.len(), std::io::Cursor::new(err_str))
-            .status(status)
-            .header(rocket::http::ContentType::Text)
-            .ok()
+impl std::convert::From<StatusCode> for TwitchError {
+    fn from(value: StatusCode) -> Self {
+        TwitchError::HttpError(value)
     }
 }
 
-pub type Result<T> = std::result::Result<T, TwitchError>;
+impl IntoResponse for TwitchSigError {
+    fn into_response(self) -> Response {
+        println!("twitchsigerror to response: {self:?}");
+        match self {
+            e@TwitchSigError::Missing(_) => {
+                (StatusCode::BAD_REQUEST, format!("{e}")).into_response()
+            }
+            TwitchSigError::Invalid => {
+                (StatusCode::BAD_REQUEST, "invalid signature").into_response()
+            }
+            e@TwitchSigError::InvalidHeader(_) => {
+                (StatusCode::BAD_REQUEST, format!("{e}")).into_response()
+            }
+            TwitchSigError::MissingAppSecret(e) => {
+                log::error!("{e:?}");
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
+        }
+    }
+}
+
+impl IntoResponse for TwitchError {
+    fn into_response(self) -> Response {
+        match self {
+            e@TwitchError::InvalidSig(_) => {
+                (StatusCode::BAD_REQUEST, format!("{e}")).into_response()
+            }
+            TwitchError::HttpError(code) => code.into_response(),
+        }
+    }
+}

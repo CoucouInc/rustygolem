@@ -1,12 +1,15 @@
-use crate::errors::{self, TwitchError};
-use anyhow::Context;
+use crate::errors::{self, TwitchError, TwitchSigError};
+use axum::{
+    extract::FromRequestParts,
+    http::{request::Parts, status::StatusCode},
+    response::IntoResponse,
+    routing, Router,
+};
 use hmac::{Hmac, Mac, NewMac};
-use rocket::{config::Shutdown, request::Outcome, State};
-use std::num::ParseIntError;
+use std::{num::ParseIntError, sync::Arc};
 use tokio::sync::mpsc;
 use twitch_api2::eventsub;
 
-// use crate::plugins::twitch::config::{Config, Message};
 use crate::config::{Config, Message};
 
 type HmacSha256 = Hmac<sha2::Sha256>;
@@ -18,21 +21,17 @@ fn decode_hex(s: &str) -> std::result::Result<Vec<u8>, ParseIntError> {
         .collect()
 }
 
-struct SigVerifier<'r> {
+struct SigVerifierAxum {
     expected_sig: Vec<u8>,
-    msg_id: &'r str,
-    msg_ts: &'r str,
+    msg_id: Vec<u8>,
+    msg_ts: Vec<u8>,
 }
 
-impl<'r> SigVerifier<'r> {
-    fn verify(
-        &self,
-        sub_secret: &str,
-        body: &[u8],
-    ) -> std::result::Result<(), errors::TwitchSigError> {
+impl SigVerifierAxum {
+    fn verify(&self, sub_secret: &str, body: &[u8]) -> Result<(), TwitchSigError> {
         let mut mac = HmacSha256::new_from_slice(sub_secret.as_bytes()).unwrap();
-        mac.update(self.msg_id.as_bytes());
-        mac.update(self.msg_ts.as_bytes());
+        mac.update(&self.msg_id);
+        mac.update(&self.msg_ts);
         mac.update(body);
 
         mac.verify(&self.expected_sig[..]).map_err(|_| {
@@ -43,51 +42,41 @@ impl<'r> SigVerifier<'r> {
     }
 }
 
-#[rocket::async_trait]
-impl<'r> rocket::request::FromRequest<'r> for SigVerifier<'r> {
-    type Error = errors::TwitchSigError;
+#[async_trait::async_trait]
+impl<S> FromRequestParts<S> for SigVerifierAxum
+where
+    S: Send + Sync,
+{
+    type Rejection = TwitchSigError;
 
-    async fn from_request(req: &'r rocket::Request<'_>) -> Outcome<Self, Self::Error> {
-        let sig = match req.headers().get_one("Twitch-Eventsub-Message-Signature") {
-            None => {
-                return Outcome::Failure((
-                    rocket::http::Status::BadRequest,
-                    errors::TwitchSigError::Missing("message signature"),
-                ))
-            }
-            Some(sig) => sig,
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection>
+    where
+        S: Send + Sync,
+    {
+        let sig = match parts.headers.get("Twitch-Eventsub-Message-Signature") {
+            Some(sig) => match sig.to_str() {
+                Ok(sig) => sig,
+                Err(_err) => return Err(TwitchSigError::Invalid),
+            },
+            None => return Err(TwitchSigError::Missing("message signature")),
         };
+
         let sig = match decode_hex(&sig["sha256=".len()..]) {
             Ok(bs) => bs,
-            Err(_) => {
-                return Outcome::Failure((
-                    rocket::http::Status::BadRequest,
-                    errors::TwitchSigError::Invalid,
-                ))
-            }
+            Err(_) => return Err(TwitchSigError::Invalid),
         };
 
-        let msg_id = match req.headers().get_one("Twitch-Eventsub-Message-Id") {
-            None => {
-                return Outcome::Failure((
-                    rocket::http::Status::BadRequest,
-                    errors::TwitchSigError::Missing("message id"),
-                ))
-            }
-            Some(mid) => mid,
+        let msg_id = match parts.headers.get("Twitch-Eventsub-Message-Id") {
+            Some(hdr) => hdr.as_bytes().to_vec(),
+            None => return Err(TwitchSigError::Missing("message id")),
         };
 
-        let msg_ts = match req.headers().get_one("Twitch-Eventsub-Message-Timestamp") {
-            None => {
-                return Outcome::Failure((
-                    rocket::http::Status::BadRequest,
-                    errors::TwitchSigError::Missing("message timestamp"),
-                ))
-            }
-            Some(ts) => ts,
+        let msg_ts = match parts.headers.get("Twitch-Eventsub-Message-Timestamp") {
+            Some(hdr) => hdr.as_bytes().to_vec(),
+            None => return Err(TwitchSigError::Missing("message timestamp")),
         };
 
-        Outcome::Success(SigVerifier {
+        Ok(SigVerifierAxum {
             expected_sig: sig,
             msg_id,
             msg_ts,
@@ -95,95 +84,65 @@ impl<'r> rocket::request::FromRequest<'r> for SigVerifier<'r> {
     }
 }
 
-#[rocket::post("/touitche/coucou", data = "<input>")]
-async fn webhook_post<'r>(
-    input: &str,
-    sig_verifier: SigVerifier<'_>,
-    st: &State<ServerState>,
-) -> errors::Result<String> {
-    log::debug!("got something from twitch: {:#?}", input);
-    sig_verifier
-        .verify(&st.app_secret, input.as_bytes())
-        .map_err(|err| {
-            log::error!("Twitch signature verification failed! {:?}", err);
-            errors::TwitchError::InvalidSig(err)
-        })?;
+#[derive(Clone)]
+pub struct ServerStateAxum {
+    app_secret: Arc<String>,
+    send_chan: mpsc::Sender<Message>,
+}
 
-    let payload = twitch_api2::eventsub::Payload::parse(input).expect("good twitch response");
+async fn webhook_post2(
+    sig_verifier: SigVerifierAxum,
+    axum::extract::State(state): axum::extract::State<ServerStateAxum>,
+    body: String,
+) -> Result<axum::response::Response, TwitchError> {
+    log::debug!("got something from twitch: {:?}", body);
+    sig_verifier.verify(&state.app_secret, body.as_bytes())?;
+
+    let payload = twitch_api2::eventsub::Payload::parse(&body).expect("good twitch response");
     // dbg!(&payload);
     match payload {
         eventsub::Payload::VerificationRequest(verif_req) => {
             log::debug!("verification request received: {:#?}", verif_req);
-            Ok(verif_req.challenge)
+            Ok(verif_req.challenge.into_response())
         }
         eventsub::Payload::StreamOnlineV1(online) => {
             log::debug!("online stream event: {:#?}", online);
-            st.send_chan
+            state
+                .send_chan
                 .send(Message::StreamOnline(online.event))
                 .await
                 .map_err(|err| {
                     log::error!("{:?}", err);
-                    TwitchError::RocketError(rocket::http::Status::InternalServerError)
+                    StatusCode::INTERNAL_SERVER_ERROR
                 })?;
-            Ok("".to_string())
+            Ok(().into_response())
         }
         eventsub::Payload::StreamOfflineV1(offline) => {
             log::debug!("offline stream event: {:#?}", offline);
-            st.send_chan
+            state
+                .send_chan
                 .send(Message::StreamOffline(offline.event))
                 .await
                 .map_err(|err| {
                     log::error!("{:?}", err);
-                    TwitchError::RocketError(rocket::http::Status::InternalServerError)
+                    StatusCode::INTERNAL_SERVER_ERROR
                 })?;
-            Ok("".to_string())
+            Ok(().into_response())
         }
         _ => {
             log::info!("Received unsupported payload: {:#?}", payload);
-            Ok("".to_string())
+            Err(StatusCode::NOT_IMPLEMENTED.into())
         }
     }
 }
 
-pub struct ServerState {
-    app_secret: String,
-    send_chan: mpsc::Sender<Message>,
-}
-
-pub async fn run(config: &Config, tx: mpsc::Sender<Message>) -> plugin_core::Result<()> {
-    let bind = &config.webhook_bind;
-    let rocket_config = rocket::Config {
-        address: bind
-            .parse()
-            .with_context(|| format!("Cannot parse {} as ipv4 or ipv6", bind))?,
-        port: config.webhook_port,
-        shutdown: Shutdown {
-            // let the tokio runtime handle termination
-            // this effectively disable the grace period in rocket
-            // for this usecase it's fine
-            ctrlc: false,
-            ..Shutdown::default()
-        },
-        ..rocket::Config::default()
-    };
-
-    let server_state = ServerState {
-        app_secret: config.app_secret.clone(),
+pub(crate) fn init_router(config: &Config, tx: mpsc::Sender<Message>) -> Router<()> {
+    let server_state = ServerStateAxum {
+        app_secret: Arc::new(config.app_secret.clone()),
         send_chan: tx,
     };
 
-    let result = rocket::build()
-        .mount("/", rocket::routes![webhook_post])
-        .configure(rocket_config)
-        .manage(server_state)
-        .ignite()
-        .await
-        .context("Cannot ignite rocket")?
-        .launch()
-        .await;
-    log::error!("The webhook server shutdown {:?}", result);
-    Err(plugin_core::Error::Synthetic(
-        "twitch webhook server shut down".to_string(),
-    ))
+    axum::Router::new()
+        .route("/touitche/coucou", routing::post(webhook_post2))
+        .with_state(server_state.clone())
 }
-

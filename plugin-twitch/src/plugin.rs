@@ -1,16 +1,16 @@
 use async_trait::async_trait;
 // use irc::client::prelude::Message;
-use plugin_core::{Plugin, Result, Initialised};
+use plugin_core::{Initialised, Plugin, Result};
 
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
+use tokio::sync::{mpsc, Mutex as TokioMutex};
 
 use anyhow::Context;
 use irc::client::prelude::Command;
 use irc::proto::Message as IrcMessage;
-use tokio::sync::mpsc;
 use twitch_api2::{
     eventsub::{
         self,
@@ -90,6 +90,10 @@ pub struct Twitch {
     // TODO wrap the uses of the token to automatically refresh it if expired
     token: WrappedToken,
     state: State,
+
+    // messages coming in as responses to twitch webhook, and that need to be sent
+    // to the irc network
+    twitch_rx: TokioMutex<mpsc::Receiver<Message>>,
 }
 
 #[derive(Debug, Default)]
@@ -141,33 +145,38 @@ impl Plugin for Twitch {
         .await
         .context("Cannot get app access token")?;
 
+        let (twitch_tx, twitch_rx) = mpsc::channel(5);
+
+        let router = webhook_server::init_router(&config, twitch_tx);
         let plugin = Twitch {
             config,
             token: WrappedToken(token),
             client,
             state: Default::default(),
+            twitch_rx: TokioMutex::new(twitch_rx),
         };
-        Ok(Initialised::from(plugin))
-    }
 
-    fn get_name(&self) -> &'static str {
-        "twitch"
+        Ok(Initialised {
+            plugin: Box::new(plugin),
+            router: Some(router),
+        })
     }
 
     async fn run(&self, tx: mpsc::Sender<irc::proto::Message>) -> Result<()> {
         self.sync_subscriptions().await?;
         self.state.add_streams(self.get_live_streams().await?);
 
-        let (twitch_tx, mut twitch_rx) = mpsc::channel(50);
-        let consume_msg = || async move {
-            while let Some(twitch_msg) = twitch_rx.recv().await {
-                self.process_twitch_message(&tx, twitch_msg).await?;
-            }
-            Ok(())
-        };
+        // hold that lock forever
+        let mut twitch_rx = self.twitch_rx.lock().await;
 
-        tokio::try_join!(consume_msg(), webhook_server::run(&self.config, twitch_tx))?;
+        while let Some(twitch_msg) = twitch_rx.recv().await {
+            self.process_twitch_message(&tx, twitch_msg).await?;
+        }
         Ok(())
+    }
+
+    fn get_name(&self) -> &'static str {
+        "twitch"
     }
 
     async fn in_message(&self, msg: &IrcMessage) -> Result<Option<IrcMessage>> {

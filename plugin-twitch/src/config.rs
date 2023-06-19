@@ -41,8 +41,6 @@ pub struct Config {
     pub client_secret: ClientSecret,
     pub app_secret: String,
     pub watched_streams: Vec<StreamSpec>,
-    pub webhook_bind: String,
-    pub webhook_port: u16,
     pub callback_uri: Obfuscated,
 }
 

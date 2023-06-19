@@ -1,10 +1,12 @@
 use crate::plugins;
 use anyhow::{Context, Result};
+use axum::Router;
 use futures::prelude::*;
 use irc::proto::Message;
-use plugin_core::Plugin;
+use plugin_core::{Initialised, Plugin};
 use serde::Deserialize;
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot};
 
@@ -13,6 +15,8 @@ struct GolemConfig {
     blacklisted_users: Vec<String>,
     plugins: Vec<String>,
     sasl_password: Option<String>,
+    server_bind_address: String,
+    server_bind_port: u16,
 }
 
 impl GolemConfig {
@@ -29,6 +33,11 @@ pub struct Golem {
     sasl_password: Option<String>,
     blacklisted_users: Vec<String>,
     plugins: Vec<Box<dyn Plugin>>,
+    /// bind the local server on this address
+    address: std::net::SocketAddr,
+    /// axum router so that plugins can define their own routes and state
+    /// if required. For example for webhooks
+    router: Option<Router<()>>,
 }
 
 impl Golem {
@@ -45,7 +54,7 @@ impl Golem {
         };
         let core_config = Arc::new(core_config);
 
-        let plugins = stream::iter(conf.plugins)
+        let inits = stream::iter(conf.plugins)
             .map(|name| {
                 let core_config = Arc::clone(&core_config);
                 async move { init_plugin(&core_config, &name).await }
@@ -56,20 +65,45 @@ impl Golem {
             .into_iter()
             .collect::<Result<Vec<_>>>()?;
 
+        let mut router: Option<Router<()>> = None;
+        let mut plugins = Vec::with_capacity(inits.len());
+        for init in inits {
+            if let Some(r) = init.router {
+                match router {
+                    Some(x) => {
+                        log::info!("Mounting a router from plugin {}", init.plugin.get_name());
+                        router = Some(x.merge(r))
+                    }
+                    None => router = Some(r),
+                }
+            }
+            plugins.push(init.plugin);
+        }
+
+        let addr = std::net::IpAddr::from_str(&conf.server_bind_address)?;
+        let address = std::net::SocketAddr::from((addr, conf.server_bind_port));
+
         Ok(Self {
             irc_client: Arc::new(Mutex::new(irc_client)),
             sasl_password: conf.sasl_password,
             blacklisted_users: conf.blacklisted_users,
             plugins,
+            address,
+            router,
         })
     }
 
-    pub async fn run(&self) -> Result<()> {
+    pub async fn run(&mut self) -> Result<()> {
         // blocking but shrug
         self.authenticate()
             .context("Problem while authenticating")?;
+        let router = self.router.take();
 
-        tokio::try_join!(self.run_plugins(), self.recv_irc_messages(),)?;
+        tokio::try_join!(
+            self.run_plugins(),
+            self.recv_irc_messages(),
+            self.run_server(router)
+        )?;
 
         log::error!("golem exited");
         Ok(())
@@ -217,9 +251,22 @@ impl Golem {
         client.send(message.1.clone())?;
         Ok(())
     }
+
+    async fn run_server(&self, router: Option<Router<()>>) -> Result<()> {
+        let router = match router {
+            Some(r) => r,
+            None => return Ok(()),
+        };
+
+        log::info!("Starting web server, listening on {}", self.address);
+        axum::Server::bind(&self.address)
+            .serve(router.into_make_service())
+            .await?;
+        Ok(())
+    }
 }
 
-async fn init_plugin(config: &plugin_core::Config, name: &str) -> Result<Box<dyn Plugin>> {
+async fn init_plugin(config: &plugin_core::Config, name: &str) -> Result<Initialised> {
     // TODO: generate a macro which automatically match the name
     // with the correct module based on the exports of crate::plugins
     let plugin = match name {
@@ -234,5 +281,5 @@ async fn init_plugin(config: &plugin_core::Config, name: &str) -> Result<Box<dyn
     };
     let plugin = plugin.with_context(|| format!("Cannot initalize plugin {}", name))?;
     log::info!("Plugin initialized: {}", name);
-    Ok(plugin.plugin)
+    Ok(plugin)
 }

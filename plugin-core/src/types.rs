@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use irc::proto::Message;
 use tokio::sync::mpsc;
+use axum::Router;
 
 #[derive(Debug, thiserror::Error)]
 #[allow(dead_code)]
@@ -35,12 +36,14 @@ pub struct Config {
 
 pub struct Initialised {
     pub plugin: Box<dyn Plugin>,
+    pub router: Option<Router>,
 }
 
 impl<T: Plugin + 'static> std::convert::From<T> for Initialised {
     fn from(value: T) -> Self {
         Initialised {
             plugin: Box::new(value),
+            router: None,
         }
     }
 }

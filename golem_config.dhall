@@ -10,8 +10,8 @@ let twitch =
   -- the app_secret is used to verify webhook notifications
   -- coming from the twitch servers
   , app_secret = env:TWITCH_APP_SECRET as Text
-  , webhook_bind = env:WEBHOOK_BIND ? "0.0.0.0"
-  , webhook_port = env:WEBHOOK_PORT ? 7777
+  , server_bind_address = env:SERVER_BIND_ADDRESS ? "0.0.0.0"
+  , server_bind_port = env:SERVER_BIND_PORT ? 7777
   , callback_uri = "https://irc.geekingfrog.com/touitche/coucou"
   , watched_streams = [
     { nickname = "artart78"
