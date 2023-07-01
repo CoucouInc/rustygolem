@@ -2,13 +2,16 @@ use crate::plugins;
 use anyhow::{Context, Result};
 use axum::Router;
 use futures::prelude::*;
-use irc::proto::Message;
+use irc::client::ClientStream;
+use irc::proto::{CapSubCommand, Command, Message, Response};
 use plugin_core::{Initialised, Plugin};
 use serde::Deserialize;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use tokio::sync::{mpsc, oneshot};
+use std::time::Duration;
+use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex};
+use tokio::time::timeout;
 
 #[derive(Debug, Deserialize)]
 struct GolemConfig {
@@ -30,6 +33,7 @@ impl GolemConfig {
 
 pub struct Golem {
     irc_client: Arc<Mutex<irc::client::Client>>,
+    message_stream: AsyncMutex<ClientStream>,
     sasl_password: Option<String>,
     blacklisted_users: Vec<String>,
     plugins: Vec<Box<dyn Plugin>>,
@@ -46,9 +50,11 @@ impl Golem {
         irc_config: irc::client::data::Config,
         golem_config_path: String,
     ) -> Result<Self> {
-        let irc_client = irc::client::Client::from_config(irc_config).await?;
+        let mut irc_client = irc::client::Client::from_config(irc_config).await?;
         let conf = GolemConfig::from_path(&golem_config_path)
             .with_context(|| format!("Cannot parse golem config at {golem_config_path}"))?;
+        log::debug!("Loaded config: {conf:?}");
+
         let core_config = plugin_core::Config {
             config_path: golem_config_path,
         };
@@ -82,9 +88,11 @@ impl Golem {
 
         let addr = std::net::IpAddr::from_str(&conf.server_bind_address)?;
         let address = std::net::SocketAddr::from((addr, conf.server_bind_port));
+        let message_stream = irc_client.stream()?;
 
         Ok(Self {
             irc_client: Arc::new(Mutex::new(irc_client)),
+            message_stream: AsyncMutex::new(message_stream),
             sasl_password: conf.sasl_password,
             blacklisted_users: conf.blacklisted_users,
             plugins,
@@ -94,9 +102,10 @@ impl Golem {
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        // blocking but shrug
-        self.authenticate()
+        self.authenticate_and_identify()
+            .await
             .context("Problem while authenticating")?;
+
         let router = self.router.take();
 
         tokio::try_join!(
@@ -109,7 +118,7 @@ impl Golem {
         Ok(())
     }
 
-    fn authenticate(&self) -> Result<()> {
+    async fn authenticate_and_identify(&self) -> Result<()> {
         match self.sasl_password {
             None => {
                 log::info!("No SASL_PASSWORD env var found, not authenticating anything.");
@@ -117,27 +126,98 @@ impl Golem {
                 Ok(())
             }
             Some(ref password) => {
-                log::info!("Authenticating with SASL");
-                let client = self.irc_client.lock().unwrap();
-                client.send_cap_req(&[irc::proto::Capability::Sasl])?;
-                client.send_sasl_plain()?;
-                let nick = client.current_nickname();
-                let sasl_str = base64::encode(format!("{}\0{}\0{}", nick, nick, password));
-                client.send(irc::proto::Command::AUTHENTICATE(sasl_str))?;
-                client.identify()?;
-                log::info!("SASL authenticated (hopefully)");
+                self.sasl_auth(password).await?;
                 Ok(())
             }
         }
     }
 
-    async fn recv_irc_messages(&self) -> Result<()> {
-        let mut stream = {
-            let mut client = self.irc_client.lock().unwrap();
-            client.stream()?
-        };
+    // SASL PLAIN authentication
+    // https://ircv3.net/specs/extensions/sasl-3.1.html
+    async fn sasl_auth(&self, password: &str) -> Result<()> {
+        let client = self.irc_client.lock().unwrap();
+        let nick = client.current_nickname();
+        log::info!("Authenticating with SASL for {nick}");
 
-        while let Some(irc_message) = stream.next().await.transpose()? {
+        client.send_cap_req(&[irc::proto::Capability::Sasl])?;
+        // the call client.identify() provided by the irc library starts
+        // by sending a CAP END before sending NICK and USER messages.
+        // but as far as I can tell, this is incorrect for SASL, so manually send
+        // the stuff
+        client.send(Command::NICK(nick.to_string()))?;
+        client.send(Command::USER(
+            nick.to_string(),
+            "0".to_string(),
+            format!(":{nick}"),
+        ))?;
+
+        let duration = Duration::from_secs(10);
+        timeout(
+            duration,
+            self.wait_for_message(|msg| match &msg.command {
+                Command::CAP(_, CapSubCommand::ACK, Some(opt), _) if opt == "sasl" => true,
+                _ => false,
+            }),
+        )
+        .await
+        .context("Timeout waiting for CAP ACK sasl")??;
+
+        log::info!("GOT ACK for SASL !");
+        client.send_sasl_plain()?;
+
+        timeout(
+            duration,
+            self.wait_for_message(|msg| match &msg.command {
+                Command::AUTHENTICATE(s) if s == "+" => true,
+                _ => false,
+            }),
+        )
+        .await
+        .context("Timeout waiting for AUTHENTICATE + from server")??;
+
+        let sasl_str = base64::encode(format!("\0{}\0{}", nick, password));
+        client.send(Command::AUTHENTICATE(sasl_str))?;
+
+        let resp = timeout(
+            duration,
+            self.wait_for_message(|msg| match &msg.command {
+                Command::Response(Response::RPL_SASLSUCCESS, _) => true,
+                Command::Response(resp, _) if is_sasl_error(resp) => true,
+                _ => false,
+            }),
+        )
+        .await
+        .context("Timeout waiting for SASL acknowledment")??;
+
+        if matches!(resp.command, Command::Response(resp, _) if is_sasl_error(&resp)) {
+            anyhow::bail!("SASL auth failed {resp:?}");
+        }
+        log::info!("SASL authenticated");
+
+        client.send(Command::CAP(None, CapSubCommand::END, None, None))?;
+        log::info!("Handshake finished, ready to work");
+
+        Ok(())
+    }
+
+    /// wait until the client receive a message that matches the given predicate
+    /// and returns it. Warning, use timeout to prevent a deadlock.
+    async fn wait_for_message<F>(&self, pred: F) -> Result<Message>
+    where
+        F: Fn(&Message) -> bool,
+    {
+        let mut message_stream = self.message_stream.lock().await;
+        while let Some(message) = message_stream.next().await.transpose()? {
+            if pred(&message) {
+                return Ok(message);
+            }
+        }
+        anyhow::bail!("Waited for message failed");
+    }
+
+    async fn recv_irc_messages(&self) -> Result<()> {
+        let mut message_stream = self.message_stream.lock().await;
+        while let Some(irc_message) = message_stream.next().await.transpose()? {
             let messages = self
                 .plugins_in_messages(&irc_message)
                 .await
@@ -264,6 +344,14 @@ impl Golem {
             .await?;
         Ok(())
     }
+}
+
+// The function https://docs.rs/irc/latest/irc/client/prelude/enum.Response.html#method.is_error
+// is broken, and consider anything with a code above 400 to be an error
+// which doesn't account for SASL successes 900, 901, 902 and 903
+fn is_sasl_error(resp: &Response) -> bool {
+    // https://ircv3.net/specs/extensions/sasl-3.1.html
+    *resp as u16 >= 904
 }
 
 async fn init_plugin(config: &plugin_core::Config, name: &str) -> Result<Initialised> {
