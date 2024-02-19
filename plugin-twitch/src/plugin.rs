@@ -1,11 +1,10 @@
 use async_trait::async_trait;
 // use irc::client::prelude::Message;
 use plugin_core::{Initialised, Plugin, Result};
+use twitch_api2::twitch_oauth2::{ClientId, ClientSecret};
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::sync::Mutex;
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::{mpsc, Mutex as TokioMutex};
 
 use anyhow::Context;
@@ -22,7 +21,7 @@ use twitch_api2::{
         streams::{self, Stream},
         users::{get_users, User},
     },
-    twitch_oauth2::AppAccessToken,
+    twitch_oauth2::{AppAccessToken, TwitchToken},
     types::{EventSubId, Nickname, UserId},
     HelixClient,
 };
@@ -54,11 +53,84 @@ impl Subscription {
     }
 }
 
-struct WrappedToken(AppAccessToken);
+struct WrappedToken {
+    // tok: AppAccessToken,
+    // need a TokioMutex because the refresh_token method is async and
+    // mutably borrows the AppAccessToken, so we need to hold the lock
+    // across await point
+    tok: Arc<Mutex<AppAccessToken>>,
+    client_id: ClientId,
+    client_secret: ClientSecret,
+}
+
+// impl From<AppAccessToken> for WrappedToken {
+//     fn from(value: AppAccessToken) -> Self {
+//         WrappedToken {
+//             // tok: value
+//             tok: Arc::new(TokioMutex::new(value)),
+//         }
+//     }
+// }
 
 impl WrappedToken {
-    fn get(&self) -> &AppAccessToken {
-        &self.0
+    async fn new(client_id: ClientId, client_secret: ClientSecret) -> Result<Self> {
+        let token = Self::get_token(client_id.clone(), client_secret.clone()).await?;
+
+        Ok(Self {
+            tok: Arc::new(Mutex::new(token)),
+            client_id,
+            client_secret,
+        })
+    }
+
+    fn get(&self) -> AppAccessToken {
+        // cloning here isn't ideal really, but considering the low frequency
+        // of such requests it's fine.
+        // self.tok.clone()
+        self.tok.lock().unwrap().clone()
+    }
+
+    async fn get_token(client_id: ClientId, client_secret: ClientSecret) -> Result<AppAccessToken> {
+        let auth_client = reqwest::Client::default();
+
+        let token = AppAccessToken::get_app_access_token(
+            &auth_client,
+            client_id,
+            client_secret,
+            vec![], // scopes
+        )
+        .await
+        .context("Cannot get app access token")?;
+
+        Ok(token)
+    }
+
+    /// spawn a task in the background that ensure the given token is not expired
+    fn spawn_refresh(&self) -> tokio::task::JoinHandle<()> {
+        let tok = Arc::clone(&self.tok);
+        let client_id = self.client_id.clone();
+        let client_secret = self.client_secret.clone();
+        tokio::spawn(async move {
+            loop {
+                let d = { tok.lock().unwrap().expires_in() - Duration::from_secs(60) };
+                log::debug!("Going to sleep {}s before refreshing token.", d.as_secs());
+                tokio::time::sleep(d).await;
+                {
+                    match Self::get_token(client_id.clone(), client_secret.clone()).await {
+                        Ok(new_token) => {
+                            log::info!("Successfully acquired a new token");
+                            let mut old_tok = tok.lock().unwrap();
+                            let _ = std::mem::replace(&mut *old_tok, new_token);
+                        }
+                        Err(err) => {
+                            // don't really have a way to recover from that, it's going
+                            // to crash elsewhere in the meantime :s
+                            log::error!("Error while refreshing twitch token: {err:?}");
+                        }
+                    }
+                }
+            }
+        })
     }
 }
 
@@ -133,24 +205,18 @@ impl Plugin for Twitch {
         let config =
             Config::from_file_keyed(config_path).context(format!("Cannot read {config_path}"))?;
 
-        let auth_client = reqwest::Client::default();
         let client = HelixClient::new();
 
-        let token = AppAccessToken::get_app_access_token(
-            &auth_client,
-            config.client_id.clone(),
-            config.client_secret.clone(),
-            vec![], // scopes
-        )
-        .await
-        .context("Cannot get app access token")?;
+        let token = WrappedToken::new(config.client_id.clone(), config.client_secret.clone())
+            .await
+            .context("Cannot get app access token")?;
 
         let (twitch_tx, twitch_rx) = mpsc::channel(5);
 
         let router = webhook_server::init_router(&config, twitch_tx);
         let plugin = Twitch {
             config,
-            token: WrappedToken(token),
+            token,
             client,
             state: Default::default(),
             twitch_rx: TokioMutex::new(twitch_rx),
@@ -165,6 +231,8 @@ impl Plugin for Twitch {
     async fn run(&self, tx: mpsc::Sender<irc::proto::Message>) -> Result<()> {
         self.sync_subscriptions().await?;
         self.state.add_streams(self.get_live_streams().await?);
+
+        self.token.spawn_refresh();
 
         // hold that lock forever
         let mut twitch_rx = self.twitch_rx.lock().await;
@@ -306,13 +374,14 @@ impl Twitch {
             .iter()
             .map(|s| s.nickname.clone())
             .collect();
+
         let resp = self
             .client
             .req_get(
                 streams::GetStreamsRequest::builder()
                     .user_login(user_logins)
                     .build(),
-                self.token.get(),
+                &self.token.get(),
             )
             .await
             .context("Can't get live stream")?;
@@ -332,7 +401,7 @@ impl Twitch {
                 streams::GetStreamsRequest::builder()
                     .user_login(vec![nick.clone()])
                     .build(),
-                self.token.get(),
+                &self.token.get(),
             )
             .await
             .with_context(|| format!("Can't get live stream for {}", &nick))?;
@@ -430,7 +499,7 @@ impl Twitch {
             .build();
         let user_resp = self
             .client
-            .req_get(req, self.token.get())
+            .req_get(req, &self.token.get())
             .await
             .map_err(|e| plugin_core::Error::Wrapped {
                 source: Box::new(e),
@@ -446,7 +515,7 @@ impl Twitch {
             .client
             .req_get(
                 helix::eventsub::GetEventSubSubscriptionsRequest::builder().build(),
-                self.token.get(),
+                &self.token.get(),
             )
             .await
             .map_err(|e| plugin_core::Error::Wrapped {
@@ -487,7 +556,7 @@ impl Twitch {
                 helix::eventsub::DeleteEventSubSubscriptionRequest::builder()
                     .id(sub.id.clone())
                     .build(),
-                self.token.get(),
+                &self.token.get(),
             )
             .await
             .map_err(|e| plugin_core::Error::Wrapped {
@@ -571,7 +640,7 @@ impl Twitch {
             .req_post(
                 helix::eventsub::CreateEventSubSubscriptionRequest::builder().build(),
                 sub_body,
-                self.token.get(),
+                &self.token.get(),
             )
             // treat a conflict as a crash there
             .await
